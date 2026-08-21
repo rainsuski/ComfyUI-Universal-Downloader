@@ -32,24 +32,35 @@ class UniversalDownloaderUI {
         this.isModalOpen = false;
         this.activeConflictTasks = new Set();
         this.cachedTasksMap = new Map();
-
-        // 内存配置缓存
-        this.cachedServerConfig = {
+        this.serverConfig = {
             civitai_token: "",
             aria2_path: "",
             hf_use_mirror: true
         };
     }
 
-    async initConfig() {
+    async loadServerConfig() {
         try {
             const res = await fetch("/universal_downloader/api/config");
             const data = await res.json();
             if (data.success && data.config) {
-                this.cachedServerConfig = { ...this.cachedServerConfig, ...data.config };
+                this.serverConfig = { ...this.serverConfig, ...data.config };
             }
         } catch (e) {
-            console.warn("[Downloader] 初始化服务端配置失败:", e);
+            console.warn("[Downloader] 初始化拉取配置失败:", e);
+        }
+    }
+
+    async saveServerConfig(cfg) {
+        this.serverConfig = { ...this.serverConfig, ...cfg };
+        try {
+            await fetch("/universal_downloader/api/config", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(cfg)
+            });
+        } catch (e) {
+            console.warn("[Downloader] 保存配置到服务端失败:", e);
         }
     }
 
@@ -298,11 +309,14 @@ class UniversalDownloaderUI {
         }
     }
 
-    openTaskModal({ isEdit = false, taskId = null, taskData = null } = {}) {
+    async openTaskModal({ isEdit = false, taskId = null, taskData = null } = {}) {
         if (this.isModalOpen) return;
         this.isModalOpen = true;
 
-        const globalConfig = this.cachedServerConfig;
+        // 打开弹窗前拉取最新的服务端持久化配置
+        await this.loadServerConfig();
+
+        const globalConfig = this.serverConfig;
         const params = (isEdit && taskData && taskData.params) ? taskData.params : {};
 
         const initialUrl = params.url_or_air || (taskData ? taskData.url_or_air : "") || "";
@@ -411,7 +425,7 @@ class UniversalDownloaderUI {
             if (e.target === modalBackdrop) closeModal();
         };
 
-        modalBackdrop.querySelector("#ud-modal-submit-btn").onclick = () => {
+        modalBackdrop.querySelector("#ud-modal-submit-btn").onclick = async () => {
             const url_or_air = modalBackdrop.querySelector("#ud-in-url").value.trim();
             if (!url_or_air) {
                 alert("请输入资源地址 (url_or_air)!");
@@ -434,27 +448,29 @@ class UniversalDownloaderUI {
                 hf_use_mirror: modalBackdrop.querySelector("#ud-in-hf-mirror").checked
             };
 
-            // 即时更新前端内存缓存
-            this.cachedServerConfig = {
+            // 1. 同步等待配置成功写入后端
+            await this.saveServerConfig({
                 civitai_token: payload.civitai_token,
                 aria2_path: payload.aria2_path,
                 hf_use_mirror: payload.hf_use_mirror
-            };
+            });
 
             closeModal();
 
+            // 2. 提交任务
             const targetApi = isEdit ? "/universal_downloader/api/edit" : "/universal_downloader/api/submit";
             const requestBody = isEdit ? { ...payload, task_id: taskId } : payload;
 
-            fetch(targetApi, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(requestBody)
-            }).then(() => {
+            try {
+                await fetch(targetApi, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(requestBody)
+                });
                 this.fetchTasks();
-            }).catch(err => {
+            } catch (err) {
                 console.error("提交异常:", err);
-            });
+            }
         };
     }
 }
@@ -467,10 +483,9 @@ window.__ud_edit = (id) => downloaderUI.editTask(id);
 app.registerExtension({
     name: "Comfy.UniversalDownloader",
     async setup() {
-        // 1. 初始化时预拉取一次服务端持久化配置
-        await downloaderUI.initConfig();
+        // 前端初始化时拉取一次服务端配置存入内存
+        await downloaderUI.loadServerConfig();
 
-        // 2. 注册侧边栏 Tab
         if (app.extensionManager && typeof app.extensionManager.registerSidebarTab === "function") {
             app.extensionManager.registerSidebarTab({
                 id: "universal-downloader-tab",
@@ -481,8 +496,6 @@ app.registerExtension({
                 render: (el) => downloaderUI.renderSidebar(el)
             });
         }
-
-        // 3. 注册顶部栏快捷按钮
         const topbar = document.querySelector(".comfy-menu") || document.querySelector("#comfy-topbar");
         if (topbar && !document.querySelector("#ud-topbar-btn")) {
             const btn = document.createElement("button");

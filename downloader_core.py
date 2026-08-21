@@ -77,6 +77,8 @@ class DownloaderCore:
         self.config_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "downloader_config.json"
         )
+        # 初始化时即确保在磁盘上生成配置文件
+        self.load_config()
 
     # ==================== 服务端配置持久化 ====================
     def load_config(self):
@@ -85,12 +87,16 @@ class DownloaderCore:
             "aria2_path": "",
             "hf_use_mirror": True,
         }
-        if not os.path.isfile(self.config_path):
-            return default_cfg
         try:
+            if not os.path.isfile(self.config_path):
+                with open(self.config_path, "w", encoding="utf-8") as f:
+                    json.dump(default_cfg, f, indent=4, ensure_ascii=False)
+                return default_cfg
+
             with open(self.config_path, "r", encoding="utf-8") as f:
                 saved = json.load(f)
-                default_cfg.update(saved)
+                if isinstance(saved, dict):
+                    default_cfg.update(saved)
                 return default_cfg
         except (
             OSError,
@@ -99,10 +105,12 @@ class DownloaderCore:
             ValueError,
             TypeError,
         ) as e:
-            print(f"[Universal-Downloader] 读取配置失败: {e}")
+            print(f"[Universal-Downloader] 读写配置文件异常: {e}")
             return default_cfg
 
     def save_config(self, new_cfg):
+        if not isinstance(new_cfg, dict):
+            return False
         current_cfg = self.load_config()
         current_cfg.update(new_cfg)
         try:
@@ -162,6 +170,12 @@ class DownloaderCore:
             raise ValueError(
                 "无效的资源地址！请输入以 http:// 或 https:// 开头的下载链接，或 Civitai AIR 标签"
             )
+
+        # 若前端传空，自动回退读取后端持久化保存的 Token
+        saved_cfg = self.load_config()
+        effective_civitai_token = (
+            civitai_token.strip() or saved_cfg.get("civitai_token", "").strip()
+        )
 
         final_url = ""
         file_name = custom_filename.strip()
@@ -240,8 +254,8 @@ class DownloaderCore:
             if version_id:
                 api_meta_url = f"https://civitai.com/api/v1/model-versions/{version_id}"
                 headers = {"User-Agent": self.fake_ua}
-                if civitai_token.strip():
-                    headers["Authorization"] = f"Bearer {civitai_token.strip()}"
+                if effective_civitai_token:
+                    headers["Authorization"] = f"Bearer {effective_civitai_token}"
 
                 req = urllib.request.Request(api_meta_url, headers=headers)
                 try:
@@ -318,9 +332,9 @@ class DownloaderCore:
             else:
                 final_url = input_str
 
-            if "token=" not in final_url and civitai_token.strip():
+            if "token=" not in final_url and effective_civitai_token:
                 sep = "&" if "?" in final_url else "?"
-                final_url = f"{final_url}{sep}token={civitai_token.strip()}"
+                final_url = f"{final_url}{sep}token={effective_civitai_token}"
 
         # C. 通用直链
         else:
@@ -670,7 +684,11 @@ class DownloaderCore:
                         except OSError as err:
                             print(f"[Universal-Downloader] 覆盖预清理提示: {err}")
 
-                detected_aria2 = self.detect_aria2_path(aria2_path_input)
+                saved_cfg = self.load_config()
+                effective_aria2_path = (
+                    aria2_path_input.strip() or saved_cfg.get("aria2_path", "").strip()
+                )
+                detected_aria2 = self.detect_aria2_path(effective_aria2_path)
 
                 if "aria2" in download_engine and detected_aria2:
                     task["engine"] = f"aria2 ({detected_aria2})"
@@ -707,6 +725,17 @@ class DownloaderCore:
 
     def create_task(self, params):
         task_id = f"task_{uuid.uuid4().hex[:8]}"
+
+        # 后端双重保底：如果创建任务时携带了 token/aria2/mirror，自动同步更新到持久化配置文件中
+        cfg_update = {}
+        if params.get("civitai_token", "").strip():
+            cfg_update["civitai_token"] = params.get("civitai_token", "").strip()
+        if params.get("aria2_path", "").strip():
+            cfg_update["aria2_path"] = params.get("aria2_path", "").strip()
+        if "hf_use_mirror" in params:
+            cfg_update["hf_use_mirror"] = bool(params.get("hf_use_mirror"))
+        if cfg_update:
+            self.save_config(cfg_update)
 
         task = {
             "id": task_id,
