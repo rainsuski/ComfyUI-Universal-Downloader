@@ -53,7 +53,9 @@ ARIA2_ERROR_CODES = {
 
 
 class DownloaderCore:
-    """Universal Downloader 核心调度器单例类"""
+    """Universal Downloader 核心调度器单例类
+    具备 C 站多域名及变体文件解析、进行中任务排他互斥锁、物理文件冲突隔离与即时状态断流
+    """
 
     _instance = None
     _lock = threading.Lock()
@@ -160,17 +162,15 @@ class DownloaderCore:
                 else:
                     model_category = "checkpoints"
 
-        # B. Civitai (C站) 解析 (原生支持 civitai.com, civitai.red 及变体 fileId)
+        # B. Civitai (C站) 解析
         elif "civitai." in input_str or input_str.startswith("urn:air:"):
             version_id = None
             target_file_id = None
 
-            # 1. 提取 fileId 参数（用于多变体精确定位）
             m_file = re.search(r"fileId=(\d+)", input_str)
             if m_file:
                 target_file_id = m_file.group(1)
 
-            # 2. 提取 version_id
             air_match = re.search(
                 r"urn:air:([^:]+):([^:]+):civitai:([0-9]+)(@([0-9]+))?", input_str
             )
@@ -199,7 +199,6 @@ class DownloaderCore:
                 if m:
                     version_id = m.group(1)
 
-            # 3. 通过 API 查询模型元数据
             if version_id:
                 api_meta_url = f"https://civitai.com/api/v1/model-versions/{version_id}"
                 headers = {"User-Agent": self.fake_ua}
@@ -212,7 +211,6 @@ class DownloaderCore:
                         meta = json.loads(response.read().decode())
                         files_list = meta.get("files", [])
 
-                        # 精准匹配目标文件条目
                         matched_file = None
                         if target_file_id and files_list:
                             for f in files_list:
@@ -221,7 +219,6 @@ class DownloaderCore:
                                     break
 
                         if not matched_file and files_list:
-                            # 优先取主文件，其次取首个文件
                             matched_file = next(
                                 (f for f in files_list if f.get("primary")),
                                 files_list[0],
@@ -230,7 +227,6 @@ class DownloaderCore:
                         if not file_name and matched_file:
                             file_name = matched_file.get("name", "").strip()
 
-                        # 构造保留 fileId 的下载直链
                         base_download_url = meta.get(
                             "downloadUrl",
                             f"https://civitai.com/api/download/models/{version_id}",
@@ -246,7 +242,6 @@ class DownloaderCore:
                         if not file_name and "name" in meta:
                             file_name = f"{meta['name']}.safetensors"
 
-                        # 智能推导模型分类
                         if model_category == "auto":
                             m_type = (
                                 meta.get("model", {}).get("type")
@@ -732,9 +727,15 @@ class DownloaderCore:
         return True
 
     def resolve_conflict(self, task_id, action):
+        """处理冲突决策，立即修改状态阻断二次轮询"""
         if task_id in self.tasks:
             task = self.tasks[task_id]
             task["conflict_action"] = action
+            # 立即切出 CONFLICT 状态，防止异步时序差引发前端二次弹窗
+            if action == "cancel":
+                task["status"] = "CANCELLED"
+            else:
+                task["status"] = "DOWNLOADING"
             task["conflict_event"].set()
             return True
         return False

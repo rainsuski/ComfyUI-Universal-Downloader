@@ -104,6 +104,17 @@ class UniversalDownloaderUI {
     }
 
     checkConflictPrompts(tasks) {
+        // 1. 自动回收已经离开 CONFLICT 状态的标记
+        const currentConflictIds = new Set(
+            tasks.filter(t => t.status === "CONFLICT").map(t => t.id)
+        );
+        for (const activeId of this.activeConflictTasks) {
+            if (!currentConflictIds.has(activeId)) {
+                this.activeConflictTasks.delete(activeId);
+            }
+        }
+
+        // 2. 仅对全新的 CONFLICT 任务弹出一次
         tasks.forEach(task => {
             if (
                 task.status === "CONFLICT" &&
@@ -143,7 +154,6 @@ class UniversalDownloaderUI {
                 case "CANCELLED": statusBadge = `<span class="ud-badge ud-badge-muted">已取消</span>`; break;
             }
 
-            // 引擎标签渲染逻辑
             let engineBadge = "";
             const engineStr = (task.engine || "").toLowerCase();
             if (engineStr.includes("降级") || engineStr.includes("degrade")) {
@@ -154,7 +164,6 @@ class UniversalDownloaderUI {
                 engineBadge = `<span class="ud-badge ud-badge-engine-py" title="${task.engine || 'Python 原生流式'}">Python</span>`;
             }
 
-            // 操作按钮区构造
             let actionsHtml = "";
             if (isRunning || task.status === "CONFLICT") {
                 actionsHtml = `<button class="ud-btn-cancel" onclick="window.__ud_cancel('${task.id}')">取消下载</button>`;
@@ -233,7 +242,7 @@ class UniversalDownloaderUI {
 
         const sendDecision = async (action) => {
             dialog.remove();
-            this.activeConflictTasks.delete(taskId);
+            // 不在前端手动 delete，交由 checkConflictPrompts 在后端切出 CONFLICT 状态后安全回收
             try {
                 await fetch("/universal_downloader/api/resolve_conflict", {
                     method: "POST",
