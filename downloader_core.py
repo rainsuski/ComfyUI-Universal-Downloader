@@ -18,7 +18,7 @@ except ImportError:
 
 
 class DownloaderCore:
-    """Universal Downloader 核心调度器单例类 支持后台异步检测冲突与全局事件挂起等待"""
+    """Universal Downloader 核心调度器单例类"""
 
     _instance = None
     _lock = threading.Lock()
@@ -32,7 +32,11 @@ class DownloaderCore:
 
     def _init_manager(self):
         self.tasks = {}
-        self.fake_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        self.fake_ua = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        )
 
     # ==================== 路径探测器 ====================
     def detect_aria2_path(self, custom_path=""):
@@ -76,13 +80,22 @@ class DownloaderCore:
         hf_use_mirror=True,
     ):
         input_str = url_or_air.strip()
+        if not input_str:
+            raise ValueError("资源地址不能为空！")
+
+        # 【关卡 1】前置格式门禁：仅支持标准 URL 和 Civitai AIR 标签，0 毫秒熔断非法输入
+        if not input_str.startswith(("http://", "https://", "urn:air:")):
+            raise ValueError(
+                "无效的资源地址！请输入以 http:// 或 https:// 开头的完整下载链接，或 Civitai AIR 标签 (urn:air:...)"
+            )
+
         final_url = ""
         file_name = custom_filename.strip()
         model_category = target_type
 
-        # A. Hugging Face
+        # A. Hugging Face 解析
         if "huggingface.co" in input_str or "hf-mirror.com" in input_str:
-            clean_url = input_str.split("?")[0]
+            clean_url = input_str.split("?")[0].rstrip("/")
             if not file_name:
                 file_name = clean_url.split("/")[-1]
 
@@ -113,16 +126,11 @@ class DownloaderCore:
                 else:
                     model_category = "checkpoints"
 
-        # B. Civitai
-        elif (
-            "civitai" in input_str
-            or input_str.isdigit()
-            or input_str.startswith("urn:air:")
-        ):
+        # B. Civitai (C站) 解析 (仅支持 AIR 表达式或明确包含 civitai.com 的链接)
+        elif "civitai.com" in input_str or input_str.startswith("urn:air:"):
             version_id = None
             air_match = re.search(
-                r"urn:air:([^:]+):([^:]+):civitai:([0-9]+)(@([0-9]+))?",
-                input_str,
+                r"urn:air:([^:]+):([^:]+):civitai:([0-9]+)(@([0-9]+))?", input_str
             )
             if air_match:
                 m_type = air_match.group(2).lower()
@@ -144,42 +152,45 @@ class DownloaderCore:
                 m = re.search(r"modelVersionId=(\d+)", input_str)
                 if m:
                     version_id = m.group(1)
-            elif input_str.isdigit():
-                version_id = input_str
             elif "civitai.com/api/download/models/" in input_str:
                 m = re.search(r"models/(\d+)", input_str)
                 if m:
                     version_id = m.group(1)
 
+            # 单次高效请求 C 站 API 获取真实文件名与下载链
             if version_id:
                 api_meta_url = f"https://civitai.com/api/v1/model-versions/{version_id}"
-                try:
-                    headers = {"User-Agent": self.fake_ua}
-                    if civitai_token.strip():
-                        headers["Authorization"] = f"Bearer {civitai_token.strip()}"
+                headers = {"User-Agent": self.fake_ua}
+                if civitai_token.strip():
+                    headers["Authorization"] = f"Bearer {civitai_token.strip()}"
 
-                    req = urllib.request.Request(api_meta_url, headers=headers)
-                    with urllib.request.urlopen(req, timeout=6) as response:
+                req = urllib.request.Request(api_meta_url, headers=headers)
+                try:
+                    with urllib.request.urlopen(req, timeout=8) as response:
                         meta = json.loads(response.read().decode())
                         if not file_name and "files" in meta and len(meta["files"]) > 0:
-                            file_name = meta["files"][0]["name"]
-                            final_url = meta["files"][0].get(
-                                "downloadUrl",
-                                f"https://civitai.com/api/download/models/{version_id}",
-                            )
-                        else:
-                            final_url = meta.get(
-                                "downloadUrl",
-                                f"https://civitai.com/api/download/models/{version_id}",
-                            )
-                except (
-                    urllib.error.URLError,
-                    urllib.error.HTTPError,
-                    json.JSONDecodeError,
-                    TimeoutError,
-                    KeyError,
-                ):
-                    final_url = f"https://civitai.com/api/download/models/{version_id}"
+                            file_name = meta["files"][0].get("name", "").strip()
+
+                        final_url = meta.get(
+                            "downloadUrl",
+                            f"https://civitai.com/api/download/models/{version_id}",
+                        )
+                        if not file_name and "name" in meta:
+                            file_name = f"{meta['name']}.safetensors"
+                except urllib.error.HTTPError as e:
+                    if e.code == 404:
+                        raise ValueError(
+                            f"C 站不存在 Version ID 为 [{version_id}] 的模型版本！"
+                        )
+                    if e.code in (401, 403):
+                        raise ValueError(
+                            f"C 站拒绝访问 (HTTP {e.code})，该模型可能需要 Civitai API Token！"
+                        )
+                    raise ValueError(f"请求 C 站 API 失败 (HTTP {e.code}): {e.reason}")
+                except (urllib.error.URLError, TimeoutError) as e:
+                    raise ValueError(f"连接 C 站 API 超时或网络异常: {e}")
+                except json.JSONDecodeError:
+                    raise ValueError("C 站 API 返回了非法的响应数据！")
             else:
                 final_url = input_str
 
@@ -187,34 +198,25 @@ class DownloaderCore:
                 sep = "&" if "?" in final_url else "?"
                 final_url = f"{final_url}{sep}token={civitai_token.strip()}"
 
-            try:
-                head_req = urllib.request.Request(
-                    final_url,
-                    headers={"User-Agent": self.fake_ua},
-                    method="HEAD",
-                )
-                with urllib.request.urlopen(head_req, timeout=6) as head_resp:
-                    resolved_url = head_resp.geturl()
-                    if "/login" in resolved_url or "civitai.com/login" in resolved_url:
-                        raise ValueError("下载失败: Civitai Token 无效或需要登录权限")
-                    final_url = resolved_url
-            except (
-                urllib.error.URLError,
-                urllib.error.HTTPError,
-                TimeoutError,
-                OSError,
-            ) as e:
-                if "Token 无效或需要登录权限" in str(e):
-                    raise
-
         # C. 通用直链
         else:
             final_url = input_str
             clean_name = input_str.split("?")[0].rstrip("/").split("/")[-1]
             if not file_name:
-                file_name = clean_name or "downloaded_file.bin"
+                file_name = clean_name
             if model_category == "auto":
                 model_category = "custom_path"
+
+        # 【关卡 2】解析结果严格门禁
+        file_name = file_name.strip()
+        final_url = final_url.strip()
+
+        if not file_name or file_name in (".", "/", "\\"):
+            raise ValueError(
+                "未能从该地址解析出合法的文件名，请在【自定义文件名】中手动指定！"
+            )
+        if not final_url.startswith(("http://", "https://")):
+            raise ValueError("解析生成的下载直链非法，无法启动下载！")
 
         # D. 保存路径推导
         comfy_root = (
@@ -254,7 +256,7 @@ class DownloaderCore:
         base, ext = os.path.splitext(file_name)
         counter = 1
         new_name = f"{base} ({counter}){ext}"
-        while os.path.exists(os.path.join(target_dir, new_name)):
+        while os.path.isfile(os.path.join(target_dir, new_name)):
             counter += 1
             new_name = f"{base} ({counter}){ext}"
         return new_name
@@ -276,6 +278,8 @@ class DownloaderCore:
             "1M",
             "--summary-interval=1",
             "--console-log-level=notice",
+            "--allow-overwrite=true",
+            "--auto-file-renaming=false",
             f"--header=User-Agent: {self.fake_ua}",
             "-d",
             target_dir,
@@ -317,9 +321,9 @@ class DownloaderCore:
             if task["cancel_flag"]:
                 task["status"] = "CANCELLED"
                 task["speed"] = "0 B/s"
-                if os.path.exists(final_file_path):
+                if os.path.isfile(final_file_path):
                     os.remove(final_file_path)
-                if os.path.exists(aria_control_file):
+                if os.path.isfile(aria_control_file):
                     os.remove(aria_control_file)
             elif return_code == 0:
                 task["status"] = "COMPLETED"
@@ -389,10 +393,10 @@ class DownloaderCore:
             if task["cancel_flag"]:
                 task["status"] = "CANCELLED"
                 task["speed"] = "0 B/s"
-                if os.path.exists(temp_file_path):
+                if os.path.isfile(temp_file_path):
                     os.remove(temp_file_path)
             else:
-                if os.path.exists(final_file_path):
+                if os.path.isfile(final_file_path):
                     os.remove(final_file_path)
                 os.replace(temp_file_path, final_file_path)
 
@@ -409,10 +413,10 @@ class DownloaderCore:
         ) as e:
             task["status"] = "FAILED"
             task["error_msg"] = f"流式下载失败: {e}"
-            if os.path.exists(temp_file_path):
+            if os.path.isfile(temp_file_path):
                 os.remove(temp_file_path)
 
-    # ==================== 状态机与冲突决断接口 ====================
+    # ==================== 状态机与调度 ====================
     def _trigger_comfy_refresh(self):
         if folder_paths and hasattr(folder_paths, "cache"):
             try:
@@ -435,7 +439,7 @@ class DownloaderCore:
         task = {
             "id": task_id,
             "url_or_air": url_or_air,
-            "file_name": "解析中...",
+            "file_name": "正在解析资源...",
             "save_dir": "",
             "category": target_type,
             "engine": download_engine,
@@ -472,8 +476,17 @@ class DownloaderCore:
                 task["category"] = model_category
                 target_file_path = os.path.join(target_dir, file_name)
 
-                # ==================== 【同名冲突检测与挂起等待】 ====================
-                if os.path.exists(target_file_path):
+                # 【关卡 3】严格防御空文件名与文件夹误判
+                if not file_name or not file_name.strip():
+                    raise ValueError("未能获取到有效的文件名，无法启动下载！")
+
+                if os.path.isdir(target_file_path):
+                    raise ValueError(
+                        f"目标路径是一个已存在的目录，无法作为文件写入：{target_file_path}"
+                    )
+
+                # 仅在确认为真实物理文件时才进入 CONFLICT 弹窗
+                if os.path.isfile(target_file_path):
                     size_bytes = os.path.getsize(target_file_path)
                     size_str = (
                         f"{round(size_bytes / (1024 * 1024 * 1024), 2)} GB"
@@ -488,7 +501,6 @@ class DownloaderCore:
                         "full_path": target_file_path,
                     }
 
-                    # 阻塞等待前端决策（最长等待 10 分钟）
                     resolved = task["conflict_event"].wait(timeout=600)
 
                     if (
@@ -508,11 +520,12 @@ class DownloaderCore:
                         target_file_path = os.path.join(target_dir, file_name)
                     elif task["conflict_action"] == "overwrite":
                         try:
-                            os.remove(target_file_path)
-                            if os.path.exists(f"{target_file_path}.aria2"):
+                            if os.path.isfile(target_file_path):
+                                os.remove(target_file_path)
+                            if os.path.isfile(f"{target_file_path}.aria2"):
                                 os.remove(f"{target_file_path}.aria2")
                         except OSError as err:
-                            print(f"[Universal-Downloader] 预清理提示: {err}")
+                            print(f"[Universal-Downloader] 覆盖预清理提示: {err}")
 
                 detected_aria2 = self.detect_aria2_path(aria2_path_input)
 
@@ -552,7 +565,6 @@ class DownloaderCore:
         return task_id
 
     def resolve_conflict(self, task_id, action):
-        """处理同名冲突决策 (overwrite / rename / cancel)"""
         if task_id in self.tasks:
             task = self.tasks[task_id]
             task["conflict_action"] = action
@@ -565,7 +577,7 @@ class DownloaderCore:
             task = self.tasks[task_id]
             task["cancel_flag"] = True
             task["conflict_action"] = "cancel"
-            task["conflict_event"].set()  # 解除等待锁
+            task["conflict_event"].set()
 
             if task.get("process_ref"):
                 try:
@@ -582,7 +594,7 @@ class DownloaderCore:
                     f"{target_file}.aria2",
                     f"{target_file}.downloading",
                 ):
-                    if os.path.exists(f_path):
+                    if os.path.isfile(f_path):
                         try:
                             os.remove(f_path)
                         except OSError:
@@ -595,7 +607,7 @@ class DownloaderCore:
         for t in self.tasks.values():
             t_copy = t.copy()
             t_copy.pop("process_ref", None)
-            t_copy.pop("conflict_event", None)  # 移除线程锁
+            t_copy.pop("conflict_event", None)
             clean_tasks.append(t_copy)
         clean_tasks.sort(key=lambda x: x["created_at"], reverse=True)
         return clean_tasks

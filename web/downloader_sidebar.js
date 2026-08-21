@@ -48,7 +48,7 @@ class UniversalDownloaderUI {
         this.taskListEl = null;
         this.pollTimer = null;
         this.isModalOpen = false;
-        this.activeConflictTasks = new Set(); // 记录已弹出冲突窗口的任务ID，防止重复弹窗
+        this.activeConflictTasks = new Set();
     }
 
     renderSidebar(container) {
@@ -98,10 +98,14 @@ class UniversalDownloaderUI {
         } catch { }
     }
 
-    // 检查是否有任务遭遇同名冲突，自动唤起方案 B 弹窗
     checkConflictPrompts(tasks) {
         tasks.forEach(task => {
-            if (task.status === "CONFLICT" && task.conflict_info && !this.activeConflictTasks.has(task.id)) {
+            if (
+                task.status === "CONFLICT" &&
+                task.conflict_info &&
+                task.conflict_info.file_name &&
+                !this.activeConflictTasks.has(task.id)
+            ) {
                 this.activeConflictTasks.add(task.id);
                 this.showConflictDialog(task.id, task.conflict_info);
             }
@@ -167,7 +171,6 @@ class UniversalDownloaderUI {
         this.taskListEl.innerHTML = html;
     }
 
-    // 方案 B：弹出全局冲突确认弹窗
     showConflictDialog(taskId, conflictInfo) {
         const dialog = document.createElement("div");
         dialog.className = "ud-modal-backdrop ud-conflict-backdrop";
@@ -257,7 +260,7 @@ class UniversalDownloaderUI {
                 <div class="ud-modal-body">
                     <div class="ud-form-group">
                         <label class="ud-label"><span class="ud-req">*</span> url_or_air (资源地址)</label>
-                        <input type="text" class="ud-input" id="ud-in-url" placeholder="支持: C站AIR/URL/ID、HF链接、GitHub Release或文件直链" autofocus />
+                        <input type="text" class="ud-input" id="ud-in-url" placeholder="支持: C站链接/AIR标签、HF链接、GitHub Release或文件直链" autofocus />
                     </div>
 
                     <div class="ud-form-row">
@@ -343,6 +346,11 @@ class UniversalDownloaderUI {
                 return;
             }
 
+            if (!url_or_air.startsWith("http://") && !url_or_air.startsWith("https://") && !url_or_air.startsWith("urn:air:")) {
+                alert("资源地址格式不正确！请输入以 http:// 或 https:// 开头的链接，或 Civitai AIR 标签 (urn:air:...)");
+                return;
+            }
+
             const payload = {
                 url_or_air,
                 target_type: modalBackdrop.querySelector("#ud-in-target-type").value,
@@ -360,10 +368,8 @@ class UniversalDownloaderUI {
                 hf_use_mirror: payload.hf_use_mirror
             });
 
-            // 0 毫秒立即关闭弹窗
             closeModal();
 
-            // 发起后台任务
             fetch("/universal_downloader/api/submit", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
