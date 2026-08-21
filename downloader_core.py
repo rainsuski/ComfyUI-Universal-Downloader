@@ -54,7 +54,7 @@ ARIA2_ERROR_CODES = {
 
 class DownloaderCore:
     """Universal Downloader 核心调度器单例类
-    支持参数持久化、重试、原卡片原地编辑重启
+    具备精准的 Civitai (com/red) fileId 变体匹配、断点续传与物理冲突隔离
     """
 
     _instance = None
@@ -162,9 +162,17 @@ class DownloaderCore:
                 else:
                     model_category = "checkpoints"
 
-        # B. Civitai (C站) 解析
-        elif "civitai.com" in input_str or input_str.startswith("urn:air:"):
+        # B. Civitai (C站) 解析 (支持 civitai.com / civitai.red 及 AIR 标签)
+        elif "civitai." in input_str or input_str.startswith("urn:air:"):
             version_id = None
+            target_file_id = None
+
+            # 1. 提取 fileId（针对变体直链）
+            file_id_match = re.search(r"[?&]fileId=(\d+)", input_str)
+            if file_id_match:
+                target_file_id = file_id_match.group(1)
+
+            # 2. 提取 version_id
             air_match = re.search(
                 r"urn:air:([^:]+):([^:]+):civitai:([0-9]+)(@([0-9]+))?", input_str
             )
@@ -188,11 +196,12 @@ class DownloaderCore:
                 m = re.search(r"modelVersionId=(\d+)", input_str)
                 if m:
                     version_id = m.group(1)
-            elif "civitai.com/api/download/models/" in input_str:
+            elif "/models/" in input_str:
                 m = re.search(r"models/(\d+)", input_str)
                 if m:
                     version_id = m.group(1)
 
+            # 3. 请求 Civitai 官方 API 并匹配精准文件
             if version_id:
                 api_meta_url = f"https://civitai.com/api/v1/model-versions/{version_id}"
                 headers = {"User-Agent": self.fake_ua}
@@ -203,15 +212,60 @@ class DownloaderCore:
                 try:
                     with urllib.request.urlopen(req, timeout=8) as response:
                         meta = json.loads(response.read().decode())
-                        if not file_name and "files" in meta and len(meta["files"]) > 0:
-                            file_name = meta["files"][0].get("name", "").strip()
+                        files_list = meta.get("files", [])
 
-                        final_url = meta.get(
-                            "downloadUrl",
-                            f"https://civitai.com/api/download/models/{version_id}",
-                        )
+                        # 自动分类推导 (若为 auto)
+                        if (
+                            model_category == "auto"
+                            and "model" in meta
+                            and "type" in meta["model"]
+                        ):
+                            c_type = meta["model"]["type"].lower()
+                            if c_type == "checkpoint":
+                                model_category = "checkpoints"
+                            elif c_type in ("lora", "locon", "dora"):
+                                model_category = "loras"
+                            elif c_type == "vae":
+                                model_category = "vae"
+                            elif c_type == "controlnet":
+                                model_category = "controlnet"
+                            elif c_type == "upscaler":
+                                model_category = "upscale_models"
+
+                        # 优先根据 fileId 匹配具体文件
+                        matched_file = None
+                        if target_file_id:
+                            matched_file = next(
+                                (
+                                    f
+                                    for f in files_list
+                                    if str(f.get("id")) == str(target_file_id)
+                                ),
+                                None,
+                            )
+
+                        # 未指定 fileId 或未匹配到时，取 primary 或第一个文件
+                        if not matched_file and files_list:
+                            matched_file = next(
+                                (f for f in files_list if f.get("primary")),
+                                files_list[0],
+                            )
+
+                        if not file_name and matched_file:
+                            file_name = matched_file.get("name", "").strip()
+
                         if not file_name and "name" in meta:
                             file_name = f"{meta['name']}.safetensors"
+
+                        # 组装下载直链（严格保留 fileId）
+                        base_download_url = (
+                            f"https://civitai.com/api/download/models/{version_id}"
+                        )
+                        if target_file_id:
+                            final_url = f"{base_download_url}?fileId={target_file_id}"
+                        else:
+                            final_url = meta.get("downloadUrl", base_download_url)
+
                 except urllib.error.HTTPError as e:
                     if e.code == 404:
                         raise ValueError(
@@ -229,6 +283,7 @@ class DownloaderCore:
             else:
                 final_url = input_str
 
+            # 附加 Token
             if "token=" not in final_url and civitai_token.strip():
                 sep = "&" if "?" in final_url else "?"
                 final_url = f"{final_url}{sep}token={civitai_token.strip()}"
@@ -611,7 +666,6 @@ class DownloaderCore:
         return task_id
 
     def retry_task(self, task_id):
-        """重试指定失败或取消的任务"""
         if task_id not in self.tasks:
             return False
 
@@ -633,7 +687,6 @@ class DownloaderCore:
         return True
 
     def edit_task(self, task_id, new_params):
-        """原地更新任务配置并重新启动原卡片"""
         if task_id not in self.tasks:
             return False
 
