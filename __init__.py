@@ -1,34 +1,13 @@
 import json
-
 import aiohttp.web
 from server import PromptServer
-
 from .downloader_core import DownloaderCore
 
 downloader_core = DownloaderCore()
 routes = PromptServer.instance.app.router
 
 
-# 1. 预检同名文件冲突
-@PromptServer.instance.routes.post("/universal_downloader/api/precheck")
-async def handle_precheck(request):
-    try:
-        data = await request.json()
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        return aiohttp.web.json_response(
-            {"success": False, "error": f"JSON 解析失败: {e}"}, status=400
-        )
-
-    try:
-        check_res = downloader_core.precheck_conflict(data)
-        return aiohttp.web.json_response({"success": True, "result": check_res})
-    except (ValueError, KeyError, OSError) as e:
-        return aiohttp.web.json_response(
-            {"success": False, "error": str(e)}, status=400
-        )
-
-
-# 2. 提交下载任务
+# 1. 提交下载任务
 @PromptServer.instance.routes.post("/universal_downloader/api/submit")
 async def handle_submit_task(request):
     try:
@@ -53,6 +32,28 @@ async def handle_submit_task(request):
         return aiohttp.web.json_response(
             {"success": False, "error": f"创建任务失败: {e}"}, status=500
         )
+
+
+# 2. 处理冲突决策 (覆盖 / 重命名 / 取消)
+@PromptServer.instance.routes.post("/universal_downloader/api/resolve_conflict")
+async def handle_resolve_conflict(request):
+    try:
+        data = await request.json()
+        task_id = data.get("task_id", "")
+        action = data.get("action", "")
+    except (json.JSONDecodeError, UnicodeDecodeError, AttributeError) as e:
+        return aiohttp.web.json_response(
+            {"success": False, "error": f"参数错误: {e}"}, status=400
+        )
+
+    if not task_id or action not in ("overwrite", "rename", "cancel"):
+        return aiohttp.web.json_response(
+            {"success": False, "error": "无效的 task_id 或 action"},
+            status=400,
+        )
+
+    success = downloader_core.resolve_conflict(task_id, action)
+    return aiohttp.web.json_response({"success": success})
 
 
 # 3. 轮询任务列表

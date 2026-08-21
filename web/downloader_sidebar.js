@@ -48,6 +48,7 @@ class UniversalDownloaderUI {
         this.taskListEl = null;
         this.pollTimer = null;
         this.isModalOpen = false;
+        this.activeConflictTasks = new Set(); // 记录已弹出冲突窗口的任务ID，防止重复弹窗
     }
 
     renderSidebar(container) {
@@ -92,8 +93,19 @@ class UniversalDownloaderUI {
             const data = await res.json();
             if (data.success) {
                 this.renderTaskList(data.tasks);
+                this.checkConflictPrompts(data.tasks);
             }
         } catch { }
+    }
+
+    // 检查是否有任务遭遇同名冲突，自动唤起方案 B 弹窗
+    checkConflictPrompts(tasks) {
+        tasks.forEach(task => {
+            if (task.status === "CONFLICT" && task.conflict_info && !this.activeConflictTasks.has(task.id)) {
+                this.activeConflictTasks.add(task.id);
+                this.showConflictDialog(task.id, task.conflict_info);
+            }
+        });
     }
 
     renderTaskList(tasks) {
@@ -115,6 +127,7 @@ class UniversalDownloaderUI {
             let statusBadge = "";
             switch (task.status) {
                 case "PARSING": statusBadge = `<span class="ud-badge ud-badge-warn">解析中...</span>`; break;
+                case "CONFLICT": statusBadge = `<span class="ud-badge ud-badge-warn">同名冲突(待确认)</span>`; break;
                 case "DOWNLOADING": statusBadge = `<span class="ud-badge ud-badge-info">下载中</span>`; break;
                 case "COMPLETED": statusBadge = `<span class="ud-badge ud-badge-success">已完成</span>`; break;
                 case "FAILED": statusBadge = `<span class="ud-badge ud-badge-danger">失败</span>`; break;
@@ -142,7 +155,7 @@ class UniversalDownloaderUI {
 
                     ${task.error_msg ? `<div class="ud-card-error" title="${task.error_msg}">⚠️ ${task.error_msg}</div>` : ''}
 
-                    ${isRunning ? `
+                    ${(isRunning || task.status === 'CONFLICT') ? `
                         <div class="ud-card-actions">
                             <button class="ud-btn-cancel" onclick="window.__ud_cancel('${task.id}')">取消下载</button>
                         </div>
@@ -154,52 +167,8 @@ class UniversalDownloaderUI {
         this.taskListEl.innerHTML = html;
     }
 
-    async cancelTask(taskId) {
-        try {
-            await fetch("/universal_downloader/api/cancel", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ task_id: taskId })
-            });
-            this.fetchTasks();
-        } catch (e) {
-            console.error("取消任务失败:", e);
-        }
-    }
-
-    async clearFinishedTasks() {
-        try {
-            await fetch("/universal_downloader/api/clear_finished", { method: "POST" });
-            this.fetchTasks();
-        } catch (e) {
-            console.error("清理任务失败:", e);
-        }
-    }
-
-    // 真正执行提交
-    async executeSubmit(payload) {
-        try {
-            const res = await fetch("/universal_downloader/api/submit", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            });
-            const data = await res.json();
-            if (data.success) {
-                this.fetchTasks();
-                return true;
-            } else {
-                alert(`提交失败: ${data.error}`);
-                return false;
-            }
-        } catch (err) {
-            alert(`请求网络异常: ${err}`);
-            return false;
-        }
-    }
-
-    // 弹出同名文件冲突确认框
-    showConflictDialog(conflictInfo, onConfirm) {
+    // 方案 B：弹出全局冲突确认弹窗
+    showConflictDialog(taskId, conflictInfo) {
         const dialog = document.createElement("div");
         dialog.className = "ud-modal-backdrop ud-conflict-backdrop";
 
@@ -225,20 +194,49 @@ class UniversalDownloaderUI {
 
         document.body.appendChild(dialog);
 
-        const closeDialog = () => dialog.remove();
+        const sendDecision = async (action) => {
+            dialog.remove();
+            this.activeConflictTasks.delete(taskId);
+            try {
+                await fetch("/universal_downloader/api/resolve_conflict", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ task_id: taskId, action })
+                });
+                this.fetchTasks();
+            } catch (e) {
+                console.error("冲突决策提交失败:", e);
+            }
+        };
 
-        dialog.querySelector("#ud-btn-conflict-cancel").onclick = closeDialog;
-        dialog.querySelector("#ud-btn-conflict-rename").onclick = () => {
-            closeDialog();
-            onConfirm("rename");
-        };
-        dialog.querySelector("#ud-btn-conflict-overwrite").onclick = () => {
-            closeDialog();
-            onConfirm("overwrite");
-        };
+        dialog.querySelector("#ud-btn-conflict-cancel").onclick = () => sendDecision("cancel");
+        dialog.querySelector("#ud-btn-conflict-rename").onclick = () => sendDecision("rename");
+        dialog.querySelector("#ud-btn-conflict-overwrite").onclick = () => sendDecision("overwrite");
     }
 
-    // 弹出新建任务弹窗
+    async cancelTask(taskId) {
+        try {
+            await fetch("/universal_downloader/api/cancel", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ task_id: taskId })
+            });
+            this.activeConflictTasks.delete(taskId);
+            this.fetchTasks();
+        } catch (e) {
+            console.error("取消任务失败:", e);
+        }
+    }
+
+    async clearFinishedTasks() {
+        try {
+            await fetch("/universal_downloader/api/clear_finished", { method: "POST" });
+            this.fetchTasks();
+        } catch (e) {
+            console.error("清理任务失败:", e);
+        }
+    }
+
     openNewTaskModal() {
         if (this.isModalOpen) return;
         this.isModalOpen = true;
@@ -338,10 +336,8 @@ class UniversalDownloaderUI {
             if (e.target === modalBackdrop) closeModal();
         };
 
-        modalBackdrop.querySelector("#ud-modal-submit-btn").onclick = async () => {
+        modalBackdrop.querySelector("#ud-modal-submit-btn").onclick = () => {
             const url_or_air = modalBackdrop.querySelector("#ud-in-url").value.trim();
-            const civitai_token = modalBackdrop.querySelector("#ud-in-token").value.trim();
-
             if (!url_or_air) {
                 alert("请输入资源地址 (url_or_air)!");
                 return;
@@ -354,9 +350,8 @@ class UniversalDownloaderUI {
                 custom_path: modalBackdrop.querySelector("#ud-in-custom-path").value.trim(),
                 custom_filename: modalBackdrop.querySelector("#ud-in-custom-filename").value.trim(),
                 aria2_path: modalBackdrop.querySelector("#ud-in-aria2-path").value.trim(),
-                civitai_token: civitai_token,
-                hf_use_mirror: modalBackdrop.querySelector("#ud-in-hf-mirror").checked,
-                conflict_action: "overwrite"
+                civitai_token: modalBackdrop.querySelector("#ud-in-token").value.trim(),
+                hf_use_mirror: modalBackdrop.querySelector("#ud-in-hf-mirror").checked
             };
 
             saveUserConfig({
@@ -365,35 +360,19 @@ class UniversalDownloaderUI {
                 hf_use_mirror: payload.hf_use_mirror
             });
 
-            // 1. 发起预检
-            try {
-                const preRes = await fetch("/universal_downloader/api/precheck", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                });
-                const preData = await preRes.json();
+            // 0 毫秒立即关闭弹窗
+            closeModal();
 
-                if (!preData.success) {
-                    alert(`解析失败: ${preData.error}`);
-                    return;
-                }
-
-                // 2. 如果存在同名文件，弹出确认对话框
-                if (preData.result && preData.result.exists) {
-                    this.showConflictDialog(preData.result, async (action) => {
-                        payload.conflict_action = action;
-                        const ok = await this.executeSubmit(payload);
-                        if (ok) closeModal();
-                    });
-                } else {
-                    // 3. 不存在冲突，直接提交下载
-                    const ok = await this.executeSubmit(payload);
-                    if (ok) closeModal();
-                }
-            } catch (err) {
-                alert(`预检网络异常: ${err}`);
-            }
+            // 发起后台任务
+            fetch("/universal_downloader/api/submit", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            }).then(() => {
+                this.fetchTasks();
+            }).catch(err => {
+                console.error("提交异常:", err);
+            });
         };
     }
 }

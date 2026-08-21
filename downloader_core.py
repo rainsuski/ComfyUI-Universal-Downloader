@@ -18,7 +18,7 @@ except ImportError:
 
 
 class DownloaderCore:
-    """Universal Downloader 核心调度器单例类 集成预检冲突、覆盖防秒传与垃圾清理"""
+    """Universal Downloader 核心调度器单例类 支持后台异步检测冲突与全局事件挂起等待"""
 
     _instance = None
     _lock = threading.Lock()
@@ -154,10 +154,10 @@ class DownloaderCore:
             if version_id:
                 api_meta_url = f"https://civitai.com/api/v1/model-versions/{version_id}"
                 try:
-                    headers = {
-                        "User-Agent": self.fake_ua,
-                        "Authorization": f"Bearer {civitai_token.strip()}",
-                    }
+                    headers = {"User-Agent": self.fake_ua}
+                    if civitai_token.strip():
+                        headers["Authorization"] = f"Bearer {civitai_token.strip()}"
+
                     req = urllib.request.Request(api_meta_url, headers=headers)
                     with urllib.request.urlopen(req, timeout=6) as response:
                         meta = json.loads(response.read().decode())
@@ -187,7 +187,6 @@ class DownloaderCore:
                 sep = "&" if "?" in final_url else "?"
                 final_url = f"{final_url}{sep}token={civitai_token.strip()}"
 
-            # 提前发起 HEAD 请求预解析 R2 存储直链
             try:
                 head_req = urllib.request.Request(
                     final_url,
@@ -197,9 +196,7 @@ class DownloaderCore:
                 with urllib.request.urlopen(head_req, timeout=6) as head_resp:
                     resolved_url = head_resp.geturl()
                     if "/login" in resolved_url or "civitai.com/login" in resolved_url:
-                        raise ValueError(
-                            "Civitai Token 鉴权失败或已过期 (被重定向至登录页)"
-                        )
+                        raise ValueError("下载失败: Civitai Token 无效或需要登录权限")
                     final_url = resolved_url
             except (
                 urllib.error.URLError,
@@ -207,7 +204,7 @@ class DownloaderCore:
                 TimeoutError,
                 OSError,
             ) as e:
-                if "Token 鉴权失败" in str(e):
+                if "Token 无效或需要登录权限" in str(e):
                     raise
 
         # C. 通用直链
@@ -252,43 +249,6 @@ class DownloaderCore:
 
         os.makedirs(target_dir, exist_ok=True)
         return final_url, file_name, target_dir, model_category
-
-    # ==================== 预检接口 (检查同名冲突) ====================
-    def precheck_conflict(self, params):
-        _, file_name, target_dir, model_category = self.parse_resource_info(
-            url_or_air=params.get("url_or_air", ""),
-            target_type=params.get("target_type", "auto"),
-            custom_path=params.get("custom_path", ""),
-            custom_filename=params.get("custom_filename", ""),
-            civitai_token=params.get("civitai_token", ""),
-            hf_use_mirror=params.get("hf_use_mirror", True),
-        )
-
-        target_file_path = os.path.join(target_dir, file_name)
-        if os.path.isfile(target_file_path):
-            size_bytes = os.path.getsize(target_file_path)
-            if size_bytes >= 1024 * 1024 * 1024:
-                size_str = f"{round(size_bytes / (1024 * 1024 * 1024), 2)} GB"
-            else:
-                size_str = f"{round(size_bytes / (1024 * 1024), 2)} MB"
-
-            return {
-                "exists": True,
-                "file_name": file_name,
-                "target_dir": target_dir,
-                "category": model_category,
-                "file_size": size_str,
-                "full_path": target_file_path,
-            }
-
-        return {
-            "exists": False,
-            "file_name": file_name,
-            "target_dir": target_dir,
-            "category": model_category,
-            "file_size": "0 MB",
-            "full_path": target_file_path,
-        }
 
     def _generate_unique_filename(self, target_dir, file_name):
         base, ext = os.path.splitext(file_name)
@@ -452,7 +412,7 @@ class DownloaderCore:
             if os.path.exists(temp_file_path):
                 os.remove(temp_file_path)
 
-    # ==================== 状态机与接口 ====================
+    # ==================== 状态机与冲突决断接口 ====================
     def _trigger_comfy_refresh(self):
         if folder_paths and hasattr(folder_paths, "cache"):
             try:
@@ -471,7 +431,6 @@ class DownloaderCore:
         hf_use_mirror = params.get("hf_use_mirror", True)
         aria2_path_input = params.get("aria2_path", "")
         download_engine = params.get("download_engine", "aria2 (CLI)")
-        conflict_action = params.get("conflict_action", "overwrite")
 
         task = {
             "id": task_id,
@@ -488,6 +447,9 @@ class DownloaderCore:
             "error_msg": "",
             "cancel_flag": False,
             "process_ref": None,
+            "conflict_info": None,
+            "conflict_event": threading.Event(),
+            "conflict_action": None,
             "created_at": time.time(),
         }
         self.tasks[task_id] = task
@@ -505,27 +467,52 @@ class DownloaderCore:
                     )
                 )
 
-                target_file_path = os.path.join(target_dir, file_name)
-
-                # 1. 如果用户选择自动重命名
-                if conflict_action == "rename" and os.path.exists(target_file_path):
-                    file_name = self._generate_unique_filename(target_dir, file_name)
-                    target_file_path = os.path.join(target_dir, file_name)
-
-                # 2. 【核心修复】如果用户选择覆盖原文件，先物理删除旧文件和控制文件，彻底杜绝 aria2 秒退！
-                elif conflict_action == "overwrite" and os.path.exists(
-                    target_file_path
-                ):
-                    try:
-                        os.remove(target_file_path)
-                        if os.path.exists(f"{target_file_path}.aria2"):
-                            os.remove(f"{target_file_path}.aria2")
-                    except OSError as err:
-                        print(f"[Universal-Downloader] 预清理旧文件提示: {err}")
-
                 task["file_name"] = file_name
                 task["save_dir"] = target_dir
                 task["category"] = model_category
+                target_file_path = os.path.join(target_dir, file_name)
+
+                # ==================== 【同名冲突检测与挂起等待】 ====================
+                if os.path.exists(target_file_path):
+                    size_bytes = os.path.getsize(target_file_path)
+                    size_str = (
+                        f"{round(size_bytes / (1024 * 1024 * 1024), 2)} GB"
+                        if size_bytes >= 1024 * 1024 * 1024
+                        else f"{round(size_bytes / (1024 * 1024), 2)} MB"
+                    )
+
+                    task["status"] = "CONFLICT"
+                    task["conflict_info"] = {
+                        "file_name": file_name,
+                        "file_size": size_str,
+                        "full_path": target_file_path,
+                    }
+
+                    # 阻塞等待前端决策（最长等待 10 分钟）
+                    resolved = task["conflict_event"].wait(timeout=600)
+
+                    if (
+                        not resolved
+                        or task["conflict_action"] == "cancel"
+                        or task["cancel_flag"]
+                    ):
+                        task["status"] = "CANCELLED"
+                        task["speed"] = "0 B/s"
+                        return
+
+                    if task["conflict_action"] == "rename":
+                        file_name = self._generate_unique_filename(
+                            target_dir, file_name
+                        )
+                        task["file_name"] = file_name
+                        target_file_path = os.path.join(target_dir, file_name)
+                    elif task["conflict_action"] == "overwrite":
+                        try:
+                            os.remove(target_file_path)
+                            if os.path.exists(f"{target_file_path}.aria2"):
+                                os.remove(f"{target_file_path}.aria2")
+                        except OSError as err:
+                            print(f"[Universal-Downloader] 预清理提示: {err}")
 
                 detected_aria2 = self.detect_aria2_path(aria2_path_input)
 
@@ -557,17 +544,29 @@ class DownloaderCore:
                 ValueError,
             ) as e:
                 task["status"] = "FAILED"
-                task["error_msg"] = f"解析异常: {e}"
+                task["error_msg"] = str(e)
 
         thread = threading.Thread(target=_worker, daemon=True)
         thread.start()
 
         return task_id
 
+    def resolve_conflict(self, task_id, action):
+        """处理同名冲突决策 (overwrite / rename / cancel)"""
+        if task_id in self.tasks:
+            task = self.tasks[task_id]
+            task["conflict_action"] = action
+            task["conflict_event"].set()
+            return True
+        return False
+
     def cancel_task(self, task_id):
         if task_id in self.tasks:
             task = self.tasks[task_id]
             task["cancel_flag"] = True
+            task["conflict_action"] = "cancel"
+            task["conflict_event"].set()  # 解除等待锁
+
             if task.get("process_ref"):
                 try:
                     task["process_ref"].terminate()
@@ -596,6 +595,7 @@ class DownloaderCore:
         for t in self.tasks.values():
             t_copy = t.copy()
             t_copy.pop("process_ref", None)
+            t_copy.pop("conflict_event", None)  # 移除线程锁
             clean_tasks.append(t_copy)
         clean_tasks.sort(key=lambda x: x["created_at"], reverse=True)
         return clean_tasks
