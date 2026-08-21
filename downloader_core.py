@@ -53,9 +53,7 @@ ARIA2_ERROR_CODES = {
 
 
 class DownloaderCore:
-    """Universal Downloader 核心调度器单例类
-    具备精准的 Civitai (com/red) fileId 变体匹配、断点续传与物理冲突隔离
-    """
+    """Universal Downloader 核心调度器单例类"""
 
     _instance = None
     _lock = threading.Lock()
@@ -162,15 +160,15 @@ class DownloaderCore:
                 else:
                     model_category = "checkpoints"
 
-        # B. Civitai (C站) 解析 (支持 civitai.com / civitai.red 及 AIR 标签)
+        # B. Civitai (C站) 解析 (原生支持 civitai.com, civitai.red 及变体 fileId)
         elif "civitai." in input_str or input_str.startswith("urn:air:"):
             version_id = None
             target_file_id = None
 
-            # 1. 提取 fileId（针对变体直链）
-            file_id_match = re.search(r"[?&]fileId=(\d+)", input_str)
-            if file_id_match:
-                target_file_id = file_id_match.group(1)
+            # 1. 提取 fileId 参数（用于多变体精确定位）
+            m_file = re.search(r"fileId=(\d+)", input_str)
+            if m_file:
+                target_file_id = m_file.group(1)
 
             # 2. 提取 version_id
             air_match = re.search(
@@ -197,11 +195,11 @@ class DownloaderCore:
                 if m:
                     version_id = m.group(1)
             elif "/models/" in input_str:
-                m = re.search(r"models/(\d+)", input_str)
+                m = re.search(r"/models/(\d+)", input_str)
                 if m:
                     version_id = m.group(1)
 
-            # 3. 请求 Civitai 官方 API 并匹配精准文件
+            # 3. 通过 API 查询模型元数据
             if version_id:
                 api_meta_url = f"https://civitai.com/api/v1/model-versions/{version_id}"
                 headers = {"User-Agent": self.fake_ua}
@@ -214,38 +212,16 @@ class DownloaderCore:
                         meta = json.loads(response.read().decode())
                         files_list = meta.get("files", [])
 
-                        # 自动分类推导 (若为 auto)
-                        if (
-                            model_category == "auto"
-                            and "model" in meta
-                            and "type" in meta["model"]
-                        ):
-                            c_type = meta["model"]["type"].lower()
-                            if c_type == "checkpoint":
-                                model_category = "checkpoints"
-                            elif c_type in ("lora", "locon", "dora"):
-                                model_category = "loras"
-                            elif c_type == "vae":
-                                model_category = "vae"
-                            elif c_type == "controlnet":
-                                model_category = "controlnet"
-                            elif c_type == "upscaler":
-                                model_category = "upscale_models"
-
-                        # 优先根据 fileId 匹配具体文件
+                        # 精准匹配目标文件条目
                         matched_file = None
-                        if target_file_id:
-                            matched_file = next(
-                                (
-                                    f
-                                    for f in files_list
-                                    if str(f.get("id")) == str(target_file_id)
-                                ),
-                                None,
-                            )
+                        if target_file_id and files_list:
+                            for f in files_list:
+                                if str(f.get("id")) == str(target_file_id):
+                                    matched_file = f
+                                    break
 
-                        # 未指定 fileId 或未匹配到时，取 primary 或第一个文件
                         if not matched_file and files_list:
+                            # 优先取主文件，其次取首个文件
                             matched_file = next(
                                 (f for f in files_list if f.get("primary")),
                                 files_list[0],
@@ -254,17 +230,43 @@ class DownloaderCore:
                         if not file_name and matched_file:
                             file_name = matched_file.get("name", "").strip()
 
+                        # 构造保留 fileId 的下载直链
+                        base_download_url = meta.get(
+                            "downloadUrl",
+                            f"https://civitai.com/api/download/models/{version_id}",
+                        )
+                        if target_file_id:
+                            sep = "&" if "?" in base_download_url else "?"
+                            final_url = (
+                                f"{base_download_url}{sep}fileId={target_file_id}"
+                            )
+                        else:
+                            final_url = base_download_url
+
                         if not file_name and "name" in meta:
                             file_name = f"{meta['name']}.safetensors"
 
-                        # 组装下载直链（严格保留 fileId）
-                        base_download_url = (
-                            f"https://civitai.com/api/download/models/{version_id}"
-                        )
-                        if target_file_id:
-                            final_url = f"{base_download_url}?fileId={target_file_id}"
-                        else:
-                            final_url = meta.get("downloadUrl", base_download_url)
+                        # 智能推导模型分类
+                        if model_category == "auto":
+                            m_type = (
+                                meta.get("model", {}).get("type")
+                                or meta.get("type")
+                                or ""
+                            ).lower()
+                            if "checkpoint" in m_type:
+                                model_category = "checkpoints"
+                            elif any(k in m_type for k in ["lora", "locon", "dora"]):
+                                model_category = "loras"
+                            elif "vae" in m_type:
+                                model_category = "vae"
+                            elif "controlnet" in m_type:
+                                model_category = "controlnet"
+                            elif "upscale" in m_type:
+                                model_category = "upscale_models"
+                            elif "embedding" in m_type or "textual" in m_type:
+                                model_category = "embeddings"
+                            else:
+                                model_category = "checkpoints"
 
                 except urllib.error.HTTPError as e:
                     if e.code == 404:
@@ -283,7 +285,6 @@ class DownloaderCore:
             else:
                 final_url = input_str
 
-            # 附加 Token
             if "token=" not in final_url and civitai_token.strip():
                 sep = "&" if "?" in final_url else "?"
                 final_url = f"{final_url}{sep}token={civitai_token.strip()}"
@@ -297,7 +298,7 @@ class DownloaderCore:
             if model_category == "auto":
                 model_category = "custom_path"
 
-        # 【关卡 2】文件名门禁
+        # 【关卡 1】文件名门禁
         file_name = file_name.strip()
         final_url = final_url.strip()
 
@@ -330,7 +331,7 @@ class DownloaderCore:
                 )
         else:
             if model_category == "auto":
-                model_category = "loras"
+                model_category = "checkpoints"
             if folder_paths:
                 try:
                     target_dir = folder_paths.get_folder_paths(model_category)[0]
@@ -561,6 +562,25 @@ class DownloaderCore:
                         f"目标路径是一个已存在的目录，无法作为文件写入：{target_file_path}"
                     )
 
+                # 【关卡 2】内存进行中任务排他锁（同名并发直接报错熔断）
+                for tid, t in self.tasks.items():
+                    if tid != task_id and t.get("status") in (
+                        "DOWNLOADING",
+                        "PARSING",
+                        "CONFLICT",
+                    ):
+                        other_dir = t.get("save_dir", "")
+                        other_name = t.get("file_name", "")
+                        if other_dir and other_name and other_name != "正在解析资源...":
+                            other_path = os.path.join(other_dir, other_name)
+                            if os.path.abspath(other_path) == os.path.abspath(
+                                target_file_path
+                            ):
+                                raise ValueError(
+                                    f"目标文件正在下载中，请勿重复添加！(冲突任务ID: {tid})"
+                                )
+
+                # 【关卡 3】本地已有物理文件冲突检测
                 if os.path.isfile(target_file_path):
                     size_bytes = os.path.getsize(target_file_path)
                     size_str = (
