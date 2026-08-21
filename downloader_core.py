@@ -18,7 +18,7 @@ except ImportError:
 
 
 class DownloaderCore:
-    """Universal Downloader 核心调度器单例类"""
+    """Universal Downloader 核心调度器单例类 集成预检冲突、覆盖防秒传与垃圾清理"""
 
     _instance = None
     _lock = threading.Lock()
@@ -119,9 +119,6 @@ class DownloaderCore:
             or input_str.isdigit()
             or input_str.startswith("urn:air:")
         ):
-            if not civitai_token.strip():
-                raise ValueError("下载 Civitai (C站) 模型必须提供 Civitai Token！")
-
             version_id = None
             air_match = re.search(
                 r"urn:air:([^:]+):([^:]+):civitai:([0-9]+)(@([0-9]+))?",
@@ -190,6 +187,29 @@ class DownloaderCore:
                 sep = "&" if "?" in final_url else "?"
                 final_url = f"{final_url}{sep}token={civitai_token.strip()}"
 
+            # 提前发起 HEAD 请求预解析 R2 存储直链
+            try:
+                head_req = urllib.request.Request(
+                    final_url,
+                    headers={"User-Agent": self.fake_ua},
+                    method="HEAD",
+                )
+                with urllib.request.urlopen(head_req, timeout=6) as head_resp:
+                    resolved_url = head_resp.geturl()
+                    if "/login" in resolved_url or "civitai.com/login" in resolved_url:
+                        raise ValueError(
+                            "Civitai Token 鉴权失败或已过期 (被重定向至登录页)"
+                        )
+                    final_url = resolved_url
+            except (
+                urllib.error.URLError,
+                urllib.error.HTTPError,
+                TimeoutError,
+                OSError,
+            ) as e:
+                if "Token 鉴权失败" in str(e):
+                    raise
+
         # C. 通用直链
         else:
             final_url = input_str
@@ -235,7 +255,6 @@ class DownloaderCore:
 
     # ==================== 预检接口 (检查同名冲突) ====================
     def precheck_conflict(self, params):
-        """预检目标文件是否存在，返回文件信息与大小"""
         _, file_name, target_dir, model_category = self.parse_resource_info(
             url_or_air=params.get("url_or_air", ""),
             target_type=params.get("target_type", "auto"),
@@ -271,7 +290,6 @@ class DownloaderCore:
             "full_path": target_file_path,
         }
 
-    # 自动重命名编号生成 (如 model (1).safetensors)
     def _generate_unique_filename(self, target_dir, file_name):
         base, ext = os.path.splitext(file_name)
         counter = 1
@@ -339,7 +357,6 @@ class DownloaderCore:
             if task["cancel_flag"]:
                 task["status"] = "CANCELLED"
                 task["speed"] = "0 B/s"
-                # 【物理清场】任务取消时坚决删除半成品与控制文件
                 if os.path.exists(final_file_path):
                     os.remove(final_file_path)
                 if os.path.exists(aria_control_file):
@@ -488,11 +505,23 @@ class DownloaderCore:
                     )
                 )
 
-                # 处理同名重命名
-                if conflict_action == "rename" and os.path.exists(
-                    os.path.join(target_dir, file_name)
-                ):
+                target_file_path = os.path.join(target_dir, file_name)
+
+                # 1. 如果用户选择自动重命名
+                if conflict_action == "rename" and os.path.exists(target_file_path):
                     file_name = self._generate_unique_filename(target_dir, file_name)
+                    target_file_path = os.path.join(target_dir, file_name)
+
+                # 2. 【核心修复】如果用户选择覆盖原文件，先物理删除旧文件和控制文件，彻底杜绝 aria2 秒退！
+                elif conflict_action == "overwrite" and os.path.exists(
+                    target_file_path
+                ):
+                    try:
+                        os.remove(target_file_path)
+                        if os.path.exists(f"{target_file_path}.aria2"):
+                            os.remove(f"{target_file_path}.aria2")
+                    except OSError as err:
+                        print(f"[Universal-Downloader] 预清理旧文件提示: {err}")
 
                 task["file_name"] = file_name
                 task["save_dir"] = target_dir
@@ -547,7 +576,6 @@ class DownloaderCore:
             task["status"] = "CANCELLED"
             task["speed"] = "0 B/s"
 
-            # 立即物理删除半成品
             if task.get("save_dir") and task.get("file_name"):
                 target_file = os.path.join(task["save_dir"], task["file_name"])
                 for f_path in (

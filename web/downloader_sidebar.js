@@ -347,12 +347,6 @@ class UniversalDownloaderUI {
                 return;
             }
 
-            const isCivitai = url_or_air.includes("civitai") || url_or_air.startsWith("urn:air:") || /^\d+$/.test(url_or_air);
-            if (isCivitai && !civitai_token) {
-                alert("⚠️ 检测到当前为 Civitai (C站) 资源，必须填写 Civitai Token 才能正常下载！\n请在下方的 civitai_token 输入框中填入你的 Token。");
-                return;
-            }
-
             const payload = {
                 url_or_air,
                 target_type: modalBackdrop.querySelector("#ud-in-target-type").value,
