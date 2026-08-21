@@ -311,12 +311,14 @@ class DownloaderCore:
             else os.getcwd()
         )
 
+        user_path_input = custom_path.strip()
+
         if model_category == "custom_path" or target_type == "custom_path":
-            if custom_path.strip():
+            if user_path_input:
                 target_dir = (
-                    os.path.abspath(custom_path.strip())
-                    if os.path.isabs(custom_path.strip())
-                    else os.path.abspath(os.path.join(comfy_root, custom_path.strip()))
+                    os.path.abspath(user_path_input)
+                    if os.path.isabs(user_path_input)
+                    else os.path.abspath(os.path.join(comfy_root, user_path_input))
                 )
             else:
                 target_dir = (
@@ -325,15 +327,31 @@ class DownloaderCore:
                     else os.path.join(comfy_root, "models", "custom_downloads")
                 )
         else:
+            # 1. 确定基础模型类型对应目录
             if model_category == "auto":
                 model_category = "checkpoints"
             if folder_paths:
                 try:
-                    target_dir = folder_paths.get_folder_paths(model_category)[0]
+                    base_target_dir = folder_paths.get_folder_paths(model_category)[0]
                 except (KeyError, IndexError, AttributeError):
-                    target_dir = os.path.join(folder_paths.models_dir, model_category)
+                    base_target_dir = os.path.join(
+                        folder_paths.models_dir, model_category
+                    )
             else:
-                target_dir = os.path.join(comfy_root, "models", model_category)
+                base_target_dir = os.path.join(comfy_root, "models", model_category)
+
+            # 2. 如果用户提供了 custom_path，支持在基础目录下追加子目录或绝对路径覆盖
+            if user_path_input:
+                if os.path.isabs(user_path_input):
+                    target_dir = os.path.abspath(user_path_input)
+                else:
+                    # 去除首尾多余斜杠，作为子目录安全拼接
+                    clean_sub_path = user_path_input.strip("/\\")
+                    target_dir = os.path.abspath(
+                        os.path.join(base_target_dir, clean_sub_path)
+                    )
+            else:
+                target_dir = base_target_dir
 
         os.makedirs(target_dir, exist_ok=True)
         return final_url, file_name, target_dir, model_category
@@ -731,7 +749,6 @@ class DownloaderCore:
         if task_id in self.tasks:
             task = self.tasks[task_id]
             task["conflict_action"] = action
-            # 立即切出 CONFLICT 状态，防止异步时序差引发前端二次弹窗
             if action == "cancel":
                 task["status"] = "CANCELLED"
             else:

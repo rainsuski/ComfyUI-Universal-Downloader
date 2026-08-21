@@ -104,7 +104,6 @@ class UniversalDownloaderUI {
     }
 
     checkConflictPrompts(tasks) {
-        // 1. 自动回收已经离开 CONFLICT 状态的标记
         const currentConflictIds = new Set(
             tasks.filter(t => t.status === "CONFLICT").map(t => t.id)
         );
@@ -114,7 +113,6 @@ class UniversalDownloaderUI {
             }
         }
 
-        // 2. 仅对全新的 CONFLICT 任务弹出一次
         tasks.forEach(task => {
             if (
                 task.status === "CONFLICT" &&
@@ -242,7 +240,6 @@ class UniversalDownloaderUI {
 
         const sendDecision = async (action) => {
             dialog.remove();
-            // 不在前端手动 delete，交由 checkConflictPrompts 在后端切出 CONFLICT 状态后安全回收
             try {
                 await fetch("/universal_downloader/api/resolve_conflict", {
                     method: "POST",
@@ -363,8 +360,8 @@ class UniversalDownloaderUI {
                     </div>
 
                     <div class="ud-form-group">
-                        <label class="ud-label">custom_path (自定义保存路径)</label>
-                        <input type="text" class="ud-input" id="ud-in-custom-path" value="${initialCustomPath}" placeholder="custom_path 时生效，支持相对路径(如: custom_nodes/xxx)或绝对路径" />
+                        <label class="ud-label">custom_path (子目录 / 自定义保存路径)</label>
+                        <input type="text" class="ud-input" id="ud-in-custom-path" value="${initialCustomPath}" placeholder="auto/分类模式下作为追加子目录(如: anima)；custom_path模式下为完整路径" />
                     </div>
 
                     <div class="ud-form-group">
