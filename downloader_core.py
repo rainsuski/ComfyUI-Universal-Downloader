@@ -16,9 +16,47 @@ try:
 except ImportError:
     folder_paths = None
 
+# aria2 退出代码人性化中文化字典 [2]
+ARIA2_ERROR_CODES = {
+    1: "发生未知错误",
+    2: "连接超时，目标服务器未响应",
+    3: "资源未找到 (HTTP 404 / 链接失效)",
+    4: "资源未找到且重试次数已达上限",
+    5: "下载速度过慢导致连接中断",
+    6: "网络连接异常中断",
+    7: "存在未完成的下载任务",
+    8: "远程服务器不支持断点续传",
+    9: "磁盘剩余空间不足",
+    10: "分片哈希校验失败",
+    11: "正在进行相同文件的下载",
+    12: "正在下载相同的种子信息",
+    13: "目标文件已存在",
+    14: "文件重命名失败",
+    15: "无法打开已存在的文件",
+    16: "无法创建新文件或磁盘权限受限",
+    17: "本地磁盘文件 I/O 读写错误",
+    18: "无法创建保存目录",
+    19: "DNS 域名解析失败，请检查网址主机名是否有效",
+    20: "无法解析 Metalink 文件",
+    21: "FTP 协议命令执行失败",
+    22: "HTTP 响应标头格式错误或异常",
+    23: "发生过多重定向循环",
+    24: "HTTP 身份验证失败 (需有效 Token 或登录权限)",
+    25: "无法解析种子 (Torrent) 文件",
+    26: "种子文件损坏或缺少关键信息",
+    27: "Magnet 磁力链接解析失败",
+    28: "aria2 命令参数错误",
+    29: "目标服务器拒绝响应或服务不可用 (HTTP 503/地址不可达)",
+    30: "RPC 响应数据解析失败",
+    31: "校验和 (Checksum) 不匹配",
+    32: "校验和计算过程异常",
+}
+
 
 class DownloaderCore:
-    """Universal Downloader 核心调度器单例类"""
+    """Universal Downloader 核心调度器单例类
+    具备精准的错误转义、流式日志捕获与物理文件冲突隔离机制
+    """
 
     _instance = None
     _lock = threading.Lock()
@@ -83,10 +121,9 @@ class DownloaderCore:
         if not input_str:
             raise ValueError("资源地址不能为空！")
 
-        # 【关卡 1】前置格式门禁：仅支持标准 URL 和 Civitai AIR 标签，0 毫秒熔断非法输入
         if not input_str.startswith(("http://", "https://", "urn:air:")):
             raise ValueError(
-                "无效的资源地址！请输入以 http:// 或 https:// 开头的完整下载链接，或 Civitai AIR 标签 (urn:air:...)"
+                "无效的资源地址！请输入以 http:// 或 https:// 开头的下载链接，或 Civitai AIR 标签"
             )
 
         final_url = ""
@@ -126,7 +163,7 @@ class DownloaderCore:
                 else:
                     model_category = "checkpoints"
 
-        # B. Civitai (C站) 解析 (仅支持 AIR 表达式或明确包含 civitai.com 的链接)
+        # B. Civitai (C站) 解析
         elif "civitai.com" in input_str or input_str.startswith("urn:air:"):
             version_id = None
             air_match = re.search(
@@ -157,7 +194,6 @@ class DownloaderCore:
                 if m:
                     version_id = m.group(1)
 
-            # 单次高效请求 C 站 API 获取真实文件名与下载链
             if version_id:
                 api_meta_url = f"https://civitai.com/api/v1/model-versions/{version_id}"
                 headers = {"User-Agent": self.fake_ua}
@@ -184,7 +220,7 @@ class DownloaderCore:
                         )
                     if e.code in (401, 403):
                         raise ValueError(
-                            f"C 站拒绝访问 (HTTP {e.code})，该模型可能需要 Civitai API Token！"
+                            f"C 站拒绝访问 (HTTP {e.code})，该模型可能需要设置 Civitai API Token！"
                         )
                     raise ValueError(f"请求 C 站 API 失败 (HTTP {e.code}): {e.reason}")
                 except (urllib.error.URLError, TimeoutError) as e:
@@ -198,7 +234,7 @@ class DownloaderCore:
                 sep = "&" if "?" in final_url else "?"
                 final_url = f"{final_url}{sep}token={civitai_token.strip()}"
 
-        # C. 通用直链
+        # C. 通用直链 (支持任意合法网络地址，包括内网/自定义端口)
         else:
             final_url = input_str
             clean_name = input_str.split("?")[0].rstrip("/").split("/")[-1]
@@ -207,7 +243,7 @@ class DownloaderCore:
             if model_category == "auto":
                 model_category = "custom_path"
 
-        # 【关卡 2】解析结果严格门禁
+        # 【关卡 2】文件名门禁
         file_name = file_name.strip()
         final_url = final_url.strip()
 
@@ -302,8 +338,13 @@ class DownloaderCore:
             progress_regex = re.compile(
                 r"\[#\w+\s+([\d\.]+\w+)/([\d\.]+\w+)\((\d+)%\).*?DL:([\d\.]+\w+)"
             )
+            last_raw_line = ""
 
             for line in iter(process.stdout.readline, ""):
+                line_str = line.strip()
+                if line_str:
+                    last_raw_line = line_str
+
                 if task["cancel_flag"]:
                     process.terminate()
                     break
@@ -332,7 +373,11 @@ class DownloaderCore:
                 self._trigger_comfy_refresh()
             else:
                 task["status"] = "FAILED"
-                task["error_msg"] = f"aria2 进程非正常退出，代码: {return_code}"
+                # 人性化中文化错误翻译
+                reason = ARIA2_ERROR_CODES.get(
+                    return_code, f"进程退出代码 {return_code}"
+                )
+                task["error_msg"] = f"下载失败: {reason}"
 
         except (OSError, subprocess.SubprocessError) as e:
             task["status"] = "FAILED"
@@ -405,14 +450,19 @@ class DownloaderCore:
                 task["speed"] = "0 B/s"
                 self._trigger_comfy_refresh()
 
-        except (
-            urllib.error.URLError,
-            urllib.error.HTTPError,
-            TimeoutError,
-            OSError,
-        ) as e:
+        except urllib.error.HTTPError as e:
             task["status"] = "FAILED"
-            task["error_msg"] = f"流式下载失败: {e}"
+            task["error_msg"] = f"HTTP 错误 {e.code}: {e.reason}"
+            if os.path.isfile(temp_file_path):
+                os.remove(temp_file_path)
+        except urllib.error.URLError as e:
+            task["status"] = "FAILED"
+            task["error_msg"] = f"网络连接失败: {e.reason}"
+            if os.path.isfile(temp_file_path):
+                os.remove(temp_file_path)
+        except (TimeoutError, OSError) as e:
+            task["status"] = "FAILED"
+            task["error_msg"] = f"流式下载异常: {e}"
             if os.path.isfile(temp_file_path):
                 os.remove(temp_file_path)
 
@@ -476,7 +526,6 @@ class DownloaderCore:
                 task["category"] = model_category
                 target_file_path = os.path.join(target_dir, file_name)
 
-                # 【关卡 3】严格防御空文件名与文件夹误判
                 if not file_name or not file_name.strip():
                     raise ValueError("未能获取到有效的文件名，无法启动下载！")
 
@@ -485,7 +534,6 @@ class DownloaderCore:
                         f"目标路径是一个已存在的目录，无法作为文件写入：{target_file_path}"
                     )
 
-                # 仅在确认为真实物理文件时才进入 CONFLICT 弹窗
                 if os.path.isfile(target_file_path):
                     size_bytes = os.path.getsize(target_file_path)
                     size_str = (
