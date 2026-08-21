@@ -5,3 +5,4 @@ __pycache__/
 .idea/
 *.log
 .DS_Store
+downloader_config.json
