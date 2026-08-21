@@ -1,0 +1,441 @@
+/* ==================== 1. 侧边栏抽屉面板 (Sidebar Drawer) ==================== */
+.ud-sidebar-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    background-color: var(--comfy-menu-bg, #18181b);
+    color: var(--comfy-fg, #e4e4e7);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+.ud-sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-color, #27272a);
+    background-color: var(--comfy-menu-header-bg, #202023);
+}
+
+.ud-header-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 15px;
+    font-weight: 600;
+    color: #f4f4f5;
+}
+
+.ud-title-icon {
+    display: flex;
+    align-items: center;
+    color: #ff9900;
+}
+
+.ud-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* ==================== 2. 通用按钮组件 ==================== */
+.ud-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px 12px;
+    font-size: 13px;
+    font-weight: 500;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+}
+
+.ud-btn-primary {
+    background-color: #ff9900;
+    color: #000;
+    font-weight: 600;
+    border-color: #ffaa22;
+}
+
+.ud-btn-primary:hover {
+    background-color: #ffa726;
+    box-shadow: 0 0 10px rgba(255, 153, 0, 0.3);
+}
+
+.ud-btn-secondary {
+    background-color: #27272a;
+    color: #a1a1aa;
+    border-color: #3f3f46;
+}
+
+.ud-btn-secondary:hover {
+    background-color: #3f3f46;
+    color: #f4f4f5;
+}
+
+/* ==================== 3. 任务列表与空状态 (Task List & Empty State) ==================== */
+.ud-task-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.ud-task-list::-webkit-scrollbar {
+    width: 6px;
+}
+
+.ud-task-list::-webkit-scrollbar-thumb {
+    background-color: #3f3f46;
+    border-radius: 3px;
+}
+
+.ud-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 70%;
+    text-align: center;
+    color: #71717a;
+    padding: 24px;
+}
+
+.ud-empty-icon {
+    margin-bottom: 12px;
+}
+
+.ud-empty-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #a1a1aa;
+    margin-bottom: 6px;
+}
+
+.ud-empty-desc {
+    font-size: 12px;
+    line-height: 1.5;
+    max-width: 200px;
+}
+
+/* ==================== 4. 任务卡片与进度条 (Task Cards) ==================== */
+.ud-task-card {
+    background-color: #202024;
+    border: 1px solid #2e2e33;
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+.ud-card-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.ud-file-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: #fafafa;
+    word-break: break-all;
+    line-height: 1.4;
+}
+
+.ud-badges {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.ud-badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+    text-transform: uppercase;
+}
+
+.ud-badge-type {
+    background-color: #3b3d4f;
+    color: #a5b4fc;
+}
+
+.ud-badge-warn {
+    background-color: #78350f;
+    color: #fde68a;
+}
+
+.ud-badge-info {
+    background-color: #1e3a8a;
+    color: #93c5fd;
+}
+
+.ud-badge-success {
+    background-color: #064e3b;
+    color: #6ee7b7;
+}
+
+.ud-badge-danger {
+    background-color: #7f1d1d;
+    color: #fca5a5;
+}
+
+.ud-badge-muted {
+    background-color: #27272a;
+    color: #71717a;
+}
+
+/* 进度条设计 */
+.ud-progress-bar-bg {
+    width: 100%;
+    height: 6px;
+    background-color: #27272a;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.ud-progress-bar-fill {
+    height: 100%;
+    width: 0%;
+    transition: width 0.3s ease;
+    border-radius: 3px;
+}
+
+.ud-progress-bar-fill.parsing {
+    background-color: #eab308;
+}
+
+.ud-progress-bar-fill.downloading {
+    background: linear-gradient(90deg, #ff9900, #ff5500);
+}
+
+.ud-progress-bar-fill.completed {
+    background-color: #10b981;
+}
+
+.ud-progress-bar-fill.failed {
+    background-color: #ef4444;
+}
+
+.ud-progress-bar-fill.cancelled {
+    background-color: #52525b;
+}
+
+.ud-card-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: #a1a1aa;
+}
+
+.ud-meta-speed {
+    color: #ff9900;
+    font-weight: 600;
+}
+
+.ud-card-error {
+    font-size: 11px;
+    color: #f87171;
+    background-color: rgba(239, 68, 68, 0.1);
+    padding: 4px 6px;
+    border-radius: 4px;
+    word-break: break-all;
+}
+
+.ud-card-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 4px;
+}
+
+.ud-btn-cancel {
+    background: none;
+    border: none;
+    color: #f87171;
+    font-size: 11px;
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 3px;
+}
+
+.ud-btn-cancel:hover {
+    background-color: rgba(248, 113, 113, 0.15);
+    text-decoration: underline;
+}
+
+/* ==================== 5. 居中新建任务弹窗 (Modal Form) ==================== */
+.ud-modal-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background-color: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+}
+
+.ud-modal-card {
+    background-color: #1a1a1d;
+    border: 1px solid #2f2f36;
+    border-radius: 12px;
+    width: 580px;
+    max-width: 90vw;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+    animation: ud-modal-fadein 0.2s ease-out;
+}
+
+@keyframes ud-modal-fadein {
+    from {
+        opacity: 0;
+        transform: scale(0.96);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+.ud-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid #27272a;
+    background-color: #212126;
+}
+
+.ud-modal-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.ud-modal-close {
+    background: none;
+    border: none;
+    color: #a1a1aa;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+}
+
+.ud-modal-close:hover {
+    color: #fff;
+    background-color: #2e2e36;
+}
+
+.ud-modal-body {
+    padding: 20px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+/* 表单控件样式 */
+.ud-form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.ud-form-row {
+    display: flex;
+    gap: 12px;
+}
+
+.flex-1 {
+    flex: 1;
+}
+
+.ud-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: #d4d4d8;
+}
+
+.ud-req {
+    color: #f87171;
+    font-weight: bold;
+}
+
+.ud-input,
+.ud-select {
+    background-color: #121214;
+    border: 1px solid #2e2e36;
+    color: #f4f4f5;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.ud-input:focus,
+.ud-select:focus {
+    border-color: #ff9900;
+    box-shadow: 0 0 0 1px #ff9900;
+}
+
+.ud-input::placeholder {
+    color: #52525b;
+    font-size: 12px;
+}
+
+.ud-switch-group {
+    padding: 4px 0;
+}
+
+.ud-switch-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: #d4d4d8;
+    cursor: pointer;
+    user-select: none;
+}
+
+.ud-switch-label input[type="checkbox"] {
+    accent-color: #ff9900;
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
+
+.ud-modal-footer {
+    padding: 14px 20px;
+    border-top: 1px solid #27272a;
+    background-color: #212126;
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
