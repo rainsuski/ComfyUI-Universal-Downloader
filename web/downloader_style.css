@@ -570,3 +570,36 @@
     justify-content: flex-end;
     gap: 8px;
 }
+
+.ud-input-with-icon {
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: 100%;
+}
+
+.ud-input-with-icon .ud-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding-right: 36px;
+    /* 为右侧眼睛留出空间 */
+}
+
+.ud-btn-eye {
+    position: absolute;
+    right: 8px;
+    background: none;
+    border: none;
+    color: #71717a;
+    cursor: pointer;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition: color 0.15s;
+}
+
+.ud-btn-eye:hover {
+    color: #ff9900;
+}

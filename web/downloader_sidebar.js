@@ -21,7 +21,9 @@ const ICONS = {
     empty: `<svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.3"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`,
     warn: `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#eab308" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>`,
     retry: `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>`,
-    edit: `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>`
+    edit: `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>`,
+    eye: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>`,
+    eyeOff: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>`
 };
 
 class UniversalDownloaderUI {
@@ -389,7 +391,10 @@ class UniversalDownloaderUI {
 
                     <div class="ud-form-group">
                         <label class="ud-label">civitai_token (Civitai API Token)</label>
-                        <input type="text" class="ud-input" id="ud-in-token" value="${initialCivitaiToken}" placeholder="Civitai API Token (civitai下载必填)" />
+                        <div class="ud-input-with-icon">
+                            <input type="password" class="ud-input" id="ud-in-token" value="${initialCivitaiToken}" placeholder="Civitai API Token (civitai下载必填)" autocomplete="off" />
+                            <button type="button" class="ud-btn-eye" id="ud-btn-toggle-token" title="显示/隐藏 Token">${ICONS.eye}</button>
+                        </div>
                     </div>
 
                     <div class="ud-form-group">
@@ -423,6 +428,14 @@ class UniversalDownloaderUI {
         modalBackdrop.querySelector("#ud-modal-cancel-btn").onclick = closeModal;
         modalBackdrop.onclick = (e) => {
             if (e.target === modalBackdrop) closeModal();
+        };
+
+        const tokenInput = modalBackdrop.querySelector("#ud-in-token");
+        const toggleTokenBtn = modalBackdrop.querySelector("#ud-btn-toggle-token");
+        toggleTokenBtn.onclick = () => {
+            const isPassword = tokenInput.type === "password";
+            tokenInput.type = isPassword ? "text" : "password";
+            toggleTokenBtn.innerHTML = isPassword ? ICONS.eyeOff : ICONS.eye;
         };
 
         modalBackdrop.querySelector("#ud-modal-submit-btn").onclick = async () => {
