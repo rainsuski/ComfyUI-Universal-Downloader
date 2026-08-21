@@ -36,7 +36,47 @@ async def handle_submit_task(request):
         )
 
 
-# 2. 处理冲突决策 (覆盖 / 重命名 / 取消)
+# 2. 重试任务
+@PromptServer.instance.routes.post("/universal_downloader/api/retry")
+async def handle_retry_task(request):
+    try:
+        data = await request.json()
+        task_id = data.get("task_id", "")
+    except (json.JSONDecodeError, UnicodeDecodeError, AttributeError) as e:
+        return aiohttp.web.json_response(
+            {"success": False, "error": f"参数错误: {e}"}, status=400
+        )
+
+    if not task_id:
+        return aiohttp.web.json_response(
+            {"success": False, "error": "缺少 task_id"}, status=400
+        )
+
+    success = downloader_core.retry_task(task_id)
+    return aiohttp.web.json_response({"success": success, "task_id": task_id})
+
+
+# 3. 编辑并重新执行任务
+@PromptServer.instance.routes.post("/universal_downloader/api/edit")
+async def handle_edit_task(request):
+    try:
+        data = await request.json()
+        task_id = data.get("task_id", "")
+    except (json.JSONDecodeError, UnicodeDecodeError, AttributeError) as e:
+        return aiohttp.web.json_response(
+            {"success": False, "error": f"参数错误: {e}"}, status=400
+        )
+
+    if not task_id:
+        return aiohttp.web.json_response(
+            {"success": False, "error": "缺少 task_id"}, status=400
+        )
+
+    success = downloader_core.edit_task(task_id, data)
+    return aiohttp.web.json_response({"success": success, "task_id": task_id})
+
+
+# 4. 处理冲突决策 (覆盖 / 重命名 / 取消)
 @PromptServer.instance.routes.post("/universal_downloader/api/resolve_conflict")
 async def handle_resolve_conflict(request):
     try:
@@ -58,7 +98,7 @@ async def handle_resolve_conflict(request):
     return aiohttp.web.json_response({"success": success})
 
 
-# 3. 轮询任务列表
+# 5. 轮询任务列表
 @PromptServer.instance.routes.get("/universal_downloader/api/tasks")
 async def handle_get_tasks(request):
     try:
@@ -70,7 +110,7 @@ async def handle_get_tasks(request):
         )
 
 
-# 4. 取消指定任务
+# 6. 取消指定任务
 @PromptServer.instance.routes.post("/universal_downloader/api/cancel")
 async def handle_cancel_task(request):
     try:
@@ -90,7 +130,7 @@ async def handle_cancel_task(request):
     return aiohttp.web.json_response({"success": success, "task_id": task_id})
 
 
-# 5. 清理历史记录
+# 7. 清理历史记录
 @PromptServer.instance.routes.post("/universal_downloader/api/clear_finished")
 async def handle_clear_finished(request):
     try:

@@ -278,6 +278,8 @@
 .ud-card-actions {
     display: flex;
     justify-content: flex-end;
+    align-items: center;
+    gap: 6px;
     margin-top: 4px;
 }
 
@@ -287,8 +289,9 @@
     color: #f87171;
     font-size: 11px;
     cursor: pointer;
-    padding: 2px 4px;
-    border-radius: 3px;
+    padding: 3px 6px;
+    border-radius: 4px;
+    transition: background-color 0.15s;
 }
 
 .ud-btn-cancel:hover {
@@ -296,7 +299,42 @@
     text-decoration: underline;
 }
 
-/* ==================== 5. 居中新建任务弹窗 ==================== */
+.ud-btn-card-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: 500;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.ud-btn-retry {
+    background-color: #27272a;
+    border-color: #ffaa22;
+    color: #ffaa22;
+}
+
+.ud-btn-retry:hover {
+    background-color: #ff9900;
+    color: #000;
+}
+
+.ud-btn-edit-card {
+    background-color: #27272a;
+    border-color: #3b82f6;
+    color: #93c5fd;
+}
+
+.ud-btn-edit-card:hover {
+    background-color: #2563eb;
+    color: #fff;
+}
+
+/* ==================== 5. 居中新建/编辑任务弹窗 ==================== */
 .ud-modal-backdrop {
     position: fixed;
     top: 0;

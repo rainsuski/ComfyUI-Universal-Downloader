@@ -16,7 +16,6 @@ try:
 except ImportError:
     folder_paths = None
 
-# aria2 退出代码人性化中文化字典 [2]
 ARIA2_ERROR_CODES = {
     1: "发生未知错误",
     2: "连接超时，目标服务器未响应",
@@ -55,7 +54,7 @@ ARIA2_ERROR_CODES = {
 
 class DownloaderCore:
     """Universal Downloader 核心调度器单例类
-    具备精准的错误转义、流式日志捕获与物理文件冲突隔离机制
+    支持参数持久化、重试、原卡片原地编辑重启
     """
 
     _instance = None
@@ -234,7 +233,7 @@ class DownloaderCore:
                 sep = "&" if "?" in final_url else "?"
                 final_url = f"{final_url}{sep}token={civitai_token.strip()}"
 
-        # C. 通用直链 (支持任意合法网络地址，包括内网/自定义端口)
+        # C. 通用直链
         else:
             final_url = input_str
             clean_name = input_str.split("?")[0].rstrip("/").split("/")[-1]
@@ -338,13 +337,8 @@ class DownloaderCore:
             progress_regex = re.compile(
                 r"\[#\w+\s+([\d\.]+\w+)/([\d\.]+\w+)\((\d+)%\).*?DL:([\d\.]+\w+)"
             )
-            last_raw_line = ""
 
             for line in iter(process.stdout.readline, ""):
-                line_str = line.strip()
-                if line_str:
-                    last_raw_line = line_str
-
                 if task["cancel_flag"]:
                     process.terminate()
                     break
@@ -373,7 +367,6 @@ class DownloaderCore:
                 self._trigger_comfy_refresh()
             else:
                 task["status"] = "FAILED"
-                # 人性化中文化错误翻译
                 reason = ARIA2_ERROR_CODES.get(
                     return_code, f"进程退出代码 {return_code}"
                 )
@@ -474,8 +467,9 @@ class DownloaderCore:
             except (AttributeError, TypeError) as e:
                 print(f"[Universal-Downloader] 刷新模型缓存提示: {e}")
 
-    def create_task(self, params):
-        task_id = f"task_{uuid.uuid4().hex[:8]}"
+    def _start_task_thread(self, task_id):
+        task = self.tasks[task_id]
+        params = task.get("params", {})
 
         url_or_air = params.get("url_or_air", "")
         target_type = params.get("target_type", "auto")
@@ -485,28 +479,6 @@ class DownloaderCore:
         hf_use_mirror = params.get("hf_use_mirror", True)
         aria2_path_input = params.get("aria2_path", "")
         download_engine = params.get("download_engine", "aria2 (CLI)")
-
-        task = {
-            "id": task_id,
-            "url_or_air": url_or_air,
-            "file_name": "正在解析资源...",
-            "save_dir": "",
-            "category": target_type,
-            "engine": download_engine,
-            "status": "PARSING",
-            "progress": 0.0,
-            "speed": "0 B/s",
-            "downloaded": "0 MB",
-            "total": "0 MB",
-            "error_msg": "",
-            "cancel_flag": False,
-            "process_ref": None,
-            "conflict_info": None,
-            "conflict_event": threading.Event(),
-            "conflict_action": None,
-            "created_at": time.time(),
-        }
-        self.tasks[task_id] = task
 
         def _worker():
             try:
@@ -610,7 +582,81 @@ class DownloaderCore:
         thread = threading.Thread(target=_worker, daemon=True)
         thread.start()
 
+    def create_task(self, params):
+        task_id = f"task_{uuid.uuid4().hex[:8]}"
+
+        task = {
+            "id": task_id,
+            "params": dict(params),
+            "url_or_air": params.get("url_or_air", ""),
+            "file_name": "正在解析资源...",
+            "save_dir": "",
+            "category": params.get("target_type", "auto"),
+            "engine": params.get("download_engine", "aria2 (CLI)"),
+            "status": "PARSING",
+            "progress": 0.0,
+            "speed": "0 B/s",
+            "downloaded": "0 MB",
+            "total": "0 MB",
+            "error_msg": "",
+            "cancel_flag": False,
+            "process_ref": None,
+            "conflict_info": None,
+            "conflict_event": threading.Event(),
+            "conflict_action": None,
+            "created_at": time.time(),
+        }
+        self.tasks[task_id] = task
+        self._start_task_thread(task_id)
         return task_id
+
+    def retry_task(self, task_id):
+        """重试指定失败或取消的任务"""
+        if task_id not in self.tasks:
+            return False
+
+        task = self.tasks[task_id]
+        task["status"] = "PARSING"
+        task["file_name"] = "正在解析资源..."
+        task["progress"] = 0.0
+        task["speed"] = "0 B/s"
+        task["downloaded"] = "0 MB"
+        task["total"] = "0 MB"
+        task["error_msg"] = ""
+        task["cancel_flag"] = False
+        task["process_ref"] = None
+        task["conflict_info"] = None
+        task["conflict_action"] = None
+        task["conflict_event"] = threading.Event()
+
+        self._start_task_thread(task_id)
+        return True
+
+    def edit_task(self, task_id, new_params):
+        """原地更新任务配置并重新启动原卡片"""
+        if task_id not in self.tasks:
+            return False
+
+        task = self.tasks[task_id]
+        task["params"] = dict(new_params)
+        task["url_or_air"] = new_params.get("url_or_air", "")
+        task["category"] = new_params.get("target_type", "auto")
+        task["engine"] = new_params.get("download_engine", "aria2 (CLI)")
+        task["status"] = "PARSING"
+        task["file_name"] = "正在重新解析..."
+        task["progress"] = 0.0
+        task["speed"] = "0 B/s"
+        task["downloaded"] = "0 MB"
+        task["total"] = "0 MB"
+        task["error_msg"] = ""
+        task["cancel_flag"] = False
+        task["process_ref"] = None
+        task["conflict_info"] = None
+        task["conflict_action"] = None
+        task["conflict_event"] = threading.Event()
+
+        self._start_task_thread(task_id)
+        return True
 
     def resolve_conflict(self, task_id, action):
         if task_id in self.tasks:
