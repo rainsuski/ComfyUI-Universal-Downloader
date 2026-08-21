@@ -143,6 +143,17 @@ class UniversalDownloaderUI {
                 case "CANCELLED": statusBadge = `<span class="ud-badge ud-badge-muted">已取消</span>`; break;
             }
 
+            // 引擎标签渲染逻辑
+            let engineBadge = "";
+            const engineStr = (task.engine || "").toLowerCase();
+            if (engineStr.includes("降级") || engineStr.includes("degrade")) {
+                engineBadge = `<span class="ud-badge ud-badge-engine-degrade" title="${task.engine || '未找到有效 aria2，已自动降级为 Python 原生流式'}">⚠️ 降级: Python</span>`;
+            } else if (engineStr.includes("aria2")) {
+                engineBadge = `<span class="ud-badge ud-badge-engine-aria" title="${task.engine || 'aria2 多线程'}">aria2</span>`;
+            } else if (engineStr.includes("python")) {
+                engineBadge = `<span class="ud-badge ud-badge-engine-py" title="${task.engine || 'Python 原生流式'}">Python</span>`;
+            }
+
             // 操作按钮区构造
             let actionsHtml = "";
             if (isRunning || task.status === "CONFLICT") {
@@ -170,6 +181,7 @@ class UniversalDownloaderUI {
                         <div class="ud-file-name" title="${task.file_name}">${task.file_name}</div>
                         <div class="ud-badges">
                             <span class="ud-badge ud-badge-type">${task.category || 'auto'}</span>
+                            ${engineBadge}
                             ${statusBadge}
                         </div>
                     </div>

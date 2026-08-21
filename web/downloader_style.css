@@ -194,6 +194,25 @@
     color: #a5b4fc;
 }
 
+/* 引擎徽章样式 */
+.ud-badge-engine-aria {
+    background-color: #0c4a6e;
+    color: #7dd3fc;
+    border: 1px solid #0284c7;
+}
+
+.ud-badge-engine-py {
+    background-color: #1e293b;
+    color: #94a3b8;
+    border: 1px solid #334155;
+}
+
+.ud-badge-engine-degrade {
+    background-color: #451a03;
+    color: #fbbf24;
+    border: 1px solid #b45309;
+}
+
 .ud-badge-warn {
     background-color: #78350f;
     color: #fde68a;
