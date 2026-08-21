@@ -1,6 +1,6 @@
 import { app } from "../../scripts/app.js";
 
-// ==================== 1. 动态加载 CSS (避免原生 ES Module 拦截) ====================
+// 动态载入 CSS
 (function loadStyles() {
     const linkId = "ud-downloader-style";
     if (!document.getElementById(linkId)) {
@@ -13,16 +13,15 @@ import { app } from "../../scripts/app.js";
     }
 })();
 
-// ==================== 2. SVG 矢量图标定义 ====================
 const ICONS = {
     download: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`,
     plus: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>`,
     trash: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`,
     close: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`,
-    empty: `<svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.3"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`
+    empty: `<svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.3"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`,
+    warn: `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#eab308" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>`
 };
 
-// ==================== 3. LocalStorage 用户偏好持久化 ====================
 const STORAGE_KEY = "comfy_universal_downloader_config";
 
 function loadUserConfig() {
@@ -43,7 +42,6 @@ function saveUserConfig(cfg) {
     }
 }
 
-// ==================== 4. 插件 UI 主控制器 ====================
 class UniversalDownloaderUI {
     constructor() {
         this.container = null;
@@ -71,13 +69,10 @@ class UniversalDownloaderUI {
                     </button>
                 </div>
             </div>
-            <div class="ud-task-list" id="ud-task-list">
-                <!-- 动态任务卡片列表 -->
-            </div>
+            <div class="ud-task-list" id="ud-task-list"></div>
         `;
 
         this.taskListEl = this.container.querySelector("#ud-task-list");
-
         this.container.querySelector("#ud-btn-new-task").onclick = () => this.openNewTaskModal();
         this.container.querySelector("#ud-btn-clear-task").onclick = () => this.clearFinishedTasks();
 
@@ -181,12 +176,74 @@ class UniversalDownloaderUI {
         }
     }
 
+    // 真正执行提交
+    async executeSubmit(payload) {
+        try {
+            const res = await fetch("/universal_downloader/api/submit", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.fetchTasks();
+                return true;
+            } else {
+                alert(`提交失败: ${data.error}`);
+                return false;
+            }
+        } catch (err) {
+            alert(`请求网络异常: ${err}`);
+            return false;
+        }
+    }
+
+    // 弹出同名文件冲突确认框
+    showConflictDialog(conflictInfo, onConfirm) {
+        const dialog = document.createElement("div");
+        dialog.className = "ud-modal-backdrop ud-conflict-backdrop";
+
+        dialog.innerHTML = `
+            <div class="ud-modal-card ud-conflict-card">
+                <div class="ud-conflict-header">
+                    ${ICONS.warn}
+                    <div class="ud-conflict-title">检测到本地同名文件！</div>
+                </div>
+                <div class="ud-conflict-body">
+                    <p>目标路径已存在同名文件：</p>
+                    <div class="ud-conflict-filepath" title="${conflictInfo.full_path}">${conflictInfo.file_name}</div>
+                    <div class="ud-conflict-meta">本地大小: <strong>${conflictInfo.file_size}</strong></div>
+                    <p style="margin-top: 10px; color: #a1a1aa; font-size: 12px;">请选择处理方式：</p>
+                </div>
+                <div class="ud-conflict-footer">
+                    <button class="ud-btn ud-btn-secondary" id="ud-btn-conflict-cancel">取消</button>
+                    <button class="ud-btn ud-btn-rename" id="ud-btn-conflict-rename">自动重命名 (1)</button>
+                    <button class="ud-btn ud-btn-danger" id="ud-btn-conflict-overwrite">覆盖原文件</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(dialog);
+
+        const closeDialog = () => dialog.remove();
+
+        dialog.querySelector("#ud-btn-conflict-cancel").onclick = closeDialog;
+        dialog.querySelector("#ud-btn-conflict-rename").onclick = () => {
+            closeDialog();
+            onConfirm("rename");
+        };
+        dialog.querySelector("#ud-btn-conflict-overwrite").onclick = () => {
+            closeDialog();
+            onConfirm("overwrite");
+        };
+    }
+
+    // 弹出新建任务弹窗
     openNewTaskModal() {
         if (this.isModalOpen) return;
         this.isModalOpen = true;
 
         const config = loadUserConfig();
-
         const modalBackdrop = document.createElement("div");
         modalBackdrop.className = "ud-modal-backdrop";
 
@@ -277,12 +334,10 @@ class UniversalDownloaderUI {
 
         modalBackdrop.querySelector("#ud-modal-close-btn").onclick = closeModal;
         modalBackdrop.querySelector("#ud-modal-cancel-btn").onclick = closeModal;
-
         modalBackdrop.onclick = (e) => {
             if (e.target === modalBackdrop) closeModal();
         };
 
-        // 提交表单校验
         modalBackdrop.querySelector("#ud-modal-submit-btn").onclick = async () => {
             const url_or_air = modalBackdrop.querySelector("#ud-in-url").value.trim();
             const civitai_token = modalBackdrop.querySelector("#ud-in-token").value.trim();
@@ -292,7 +347,6 @@ class UniversalDownloaderUI {
                 return;
             }
 
-            // 【防坑拦截 1】如果是 C 站资源但没填 Token，直接拦截提醒
             const isCivitai = url_or_air.includes("civitai") || url_or_air.startsWith("urn:air:") || /^\d+$/.test(url_or_air);
             if (isCivitai && !civitai_token) {
                 alert("⚠️ 检测到当前为 Civitai (C站) 资源，必须填写 Civitai Token 才能正常下载！\n请在下方的 civitai_token 输入框中填入你的 Token。");
@@ -307,7 +361,8 @@ class UniversalDownloaderUI {
                 custom_filename: modalBackdrop.querySelector("#ud-in-custom-filename").value.trim(),
                 aria2_path: modalBackdrop.querySelector("#ud-in-aria2-path").value.trim(),
                 civitai_token: civitai_token,
-                hf_use_mirror: modalBackdrop.querySelector("#ud-in-hf-mirror").checked
+                hf_use_mirror: modalBackdrop.querySelector("#ud-in-hf-mirror").checked,
+                conflict_action: "overwrite"
             };
 
             saveUserConfig({
@@ -316,21 +371,34 @@ class UniversalDownloaderUI {
                 hf_use_mirror: payload.hf_use_mirror
             });
 
+            // 1. 发起预检
             try {
-                const res = await fetch("/universal_downloader/api/submit", {
+                const preRes = await fetch("/universal_downloader/api/precheck", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload)
                 });
-                const data = await res.json();
-                if (data.success) {
-                    closeModal();
-                    this.fetchTasks();
+                const preData = await preRes.json();
+
+                if (!preData.success) {
+                    alert(`解析失败: ${preData.error}`);
+                    return;
+                }
+
+                // 2. 如果存在同名文件，弹出确认对话框
+                if (preData.result && preData.result.exists) {
+                    this.showConflictDialog(preData.result, async (action) => {
+                        payload.conflict_action = action;
+                        const ok = await this.executeSubmit(payload);
+                        if (ok) closeModal();
+                    });
                 } else {
-                    alert(`提交失败: ${data.error}`);
+                    // 3. 不存在冲突，直接提交下载
+                    const ok = await this.executeSubmit(payload);
+                    if (ok) closeModal();
                 }
             } catch (err) {
-                alert(`请求网络异常: ${err}`);
+                alert(`预检网络异常: ${err}`);
             }
         };
     }
@@ -339,13 +407,9 @@ class UniversalDownloaderUI {
 const downloaderUI = new UniversalDownloaderUI();
 window.__ud_cancel = (id) => downloaderUI.cancelTask(id);
 
-// ==================== 5. 注册扩展 (侧边栏 + 顶栏双重保障) ====================
 app.registerExtension({
     name: "Comfy.UniversalDownloader",
     async setup() {
-        console.log("[Universal-Downloader] 🚀 扩展初始化挂载中...");
-
-        // 1. 挂载到 ComfyUI 官方原生侧边栏 Tab
         if (app.extensionManager && typeof app.extensionManager.registerSidebarTab === "function") {
             app.extensionManager.registerSidebarTab({
                 id: "universal-downloader-tab",
@@ -355,10 +419,7 @@ app.registerExtension({
                 type: "custom",
                 render: (el) => downloaderUI.renderSidebar(el)
             });
-            console.log("[Universal-Downloader] ✅ 侧边栏 Tab 注册成功！");
         }
-
-        // 2. 备用保障：在顶栏右侧也放一个按钮，双入口随时可用
         const topbar = document.querySelector(".comfy-menu") || document.querySelector("#comfy-topbar");
         if (topbar && !document.querySelector("#ud-topbar-btn")) {
             const btn = document.createElement("button");

@@ -11,7 +11,6 @@ import urllib.parse
 import urllib.request
 import uuid
 
-# 兼容独立运行与 ComfyUI 环境
 try:
     import folder_paths
 except ImportError:
@@ -19,7 +18,7 @@ except ImportError:
 
 
 class DownloaderCore:
-    """Universal Downloader 核心调度器单例类 管理多引擎任务调度、进度解析与文件生命周期"""
+    """Universal Downloader 核心调度器单例类"""
 
     _instance = None
     _lock = threading.Lock()
@@ -35,42 +34,7 @@ class DownloaderCore:
         self.tasks = {}
         self.fake_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
-    # ==================== 文件真伪体检机制 ====================
-    def _validate_downloaded_file(self, file_path):
-        """检查下载下来的文件是否为真实模型文件（防止下成 HTML 登录网页） 返回: (is_valid: bool, error_reason: str)"""
-        if not os.path.isfile(file_path):
-            return False, "下载文件不存在或已被移走"
-
-        file_size = os.path.getsize(file_path)
-
-        # 检查文件大小与前 512 字节内容
-        try:
-            with open(file_path, "rb") as f:
-                header = f.read(512).lower()
-
-            # 如果检测到 HTML 标签或登录特征
-            if any(
-                tag in header
-                for tag in (b"<!doctype html", b"<html", b"<head", b"<body")
-            ):
-                return (
-                    False,
-                    "服务器返回了登录鉴权网页 (HTML)，Civitai Token 无效或未提供！",
-                )
-
-            # safetensors 或模型文件通常不可能小于 50KB 且带文本特征
-            if file_size < 50 * 1024 and (b"civitai" in header or b"login" in header):
-                return (
-                    False,
-                    "文件校验失败: 返回了非模型数据，请检查 Token 权限！",
-                )
-
-        except (OSError, UnicodeDecodeError) as e:
-            return False, f"文件校验异常: {e}"
-
-        return True, ""
-
-    # ==================== 1.1 多平台 aria2 路径探测器 ====================
+    # ==================== 路径探测器 ====================
     def detect_aria2_path(self, custom_path=""):
         if custom_path and custom_path.strip():
             c_path = os.path.expanduser(custom_path.strip())
@@ -97,14 +61,11 @@ class DownloaderCore:
             ]
             for m_path in possible_motrix_paths:
                 if os.path.isfile(m_path):
-                    print(
-                        f"[Universal-Downloader] ⚡ 自动探测到 Motrix 内置 aria2: {m_path}"
-                    )
                     return m_path
 
         return None
 
-    # ==================== 1.2 资源链接与元数据解析 ====================
+    # ==================== 资源解析内核 ====================
     def parse_resource_info(
         self,
         url_or_air,
@@ -229,30 +190,7 @@ class DownloaderCore:
                 sep = "&" if "?" in final_url else "?"
                 final_url = f"{final_url}{sep}token={civitai_token.strip()}"
 
-            # 预解析 HEAD 并防范重定向到登录页
-            try:
-                head_req = urllib.request.Request(
-                    final_url,
-                    headers={"User-Agent": self.fake_ua},
-                    method="HEAD",
-                )
-                with urllib.request.urlopen(head_req, timeout=6) as head_resp:
-                    resolved_url = head_resp.geturl()
-                    if "/login" in resolved_url or "civitai.com/login" in resolved_url:
-                        raise ValueError(
-                            "Civitai Token 鉴权失败或已过期 (被重定向至登录页)"
-                        )
-                    final_url = resolved_url
-            except (
-                urllib.error.URLError,
-                urllib.error.HTTPError,
-                TimeoutError,
-                OSError,
-            ) as e:
-                if "Token 鉴权失败" in str(e):
-                    raise
-
-        # C. 通用直链 / GitHub Releases
+        # C. 通用直链
         else:
             final_url = input_str
             clean_name = input_str.split("?")[0].rstrip("/").split("/")[-1]
@@ -261,7 +199,7 @@ class DownloaderCore:
             if model_category == "auto":
                 model_category = "custom_path"
 
-        # D. 路径计算
+        # D. 保存路径推导
         comfy_root = (
             os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
             if "__file__" in locals()
@@ -295,10 +233,59 @@ class DownloaderCore:
         os.makedirs(target_dir, exist_ok=True)
         return final_url, file_name, target_dir, model_category
 
-    # ==================== 1.3 双引擎执行逻辑 ====================
+    # ==================== 预检接口 (检查同名冲突) ====================
+    def precheck_conflict(self, params):
+        """预检目标文件是否存在，返回文件信息与大小"""
+        _, file_name, target_dir, model_category = self.parse_resource_info(
+            url_or_air=params.get("url_or_air", ""),
+            target_type=params.get("target_type", "auto"),
+            custom_path=params.get("custom_path", ""),
+            custom_filename=params.get("custom_filename", ""),
+            civitai_token=params.get("civitai_token", ""),
+            hf_use_mirror=params.get("hf_use_mirror", True),
+        )
+
+        target_file_path = os.path.join(target_dir, file_name)
+        if os.path.isfile(target_file_path):
+            size_bytes = os.path.getsize(target_file_path)
+            if size_bytes >= 1024 * 1024 * 1024:
+                size_str = f"{round(size_bytes / (1024 * 1024 * 1024), 2)} GB"
+            else:
+                size_str = f"{round(size_bytes / (1024 * 1024), 2)} MB"
+
+            return {
+                "exists": True,
+                "file_name": file_name,
+                "target_dir": target_dir,
+                "category": model_category,
+                "file_size": size_str,
+                "full_path": target_file_path,
+            }
+
+        return {
+            "exists": False,
+            "file_name": file_name,
+            "target_dir": target_dir,
+            "category": model_category,
+            "file_size": "0 MB",
+            "full_path": target_file_path,
+        }
+
+    # 自动重命名编号生成 (如 model (1).safetensors)
+    def _generate_unique_filename(self, target_dir, file_name):
+        base, ext = os.path.splitext(file_name)
+        counter = 1
+        new_name = f"{base} ({counter}){ext}"
+        while os.path.exists(os.path.join(target_dir, new_name)):
+            counter += 1
+            new_name = f"{base} ({counter}){ext}"
+        return new_name
+
+    # ==================== 执行引擎 ====================
     def _run_aria2_task(self, task_id, aria2_bin, final_url, target_dir, file_name):
         task = self.tasks[task_id]
         final_file_path = os.path.join(target_dir, file_name)
+        aria_control_file = f"{final_file_path}.aria2"
 
         cmd = [
             aria2_bin,
@@ -352,26 +339,23 @@ class DownloaderCore:
             if task["cancel_flag"]:
                 task["status"] = "CANCELLED"
                 task["speed"] = "0 B/s"
+                # 【物理清场】任务取消时坚决删除半成品与控制文件
+                if os.path.exists(final_file_path):
+                    os.remove(final_file_path)
+                if os.path.exists(aria_control_file):
+                    os.remove(aria_control_file)
             elif return_code == 0:
-                # 【防伪体检】校验下载下来的文件是不是 HTML 网页
-                is_valid, err_reason = self._validate_downloaded_file(final_file_path)
-                if not is_valid:
-                    task["status"] = "FAILED"
-                    task["error_msg"] = err_reason
-                    if os.path.exists(final_file_path):
-                        os.remove(final_file_path)  # 彻底销毁 10KB 假文件
-                else:
-                    task["status"] = "COMPLETED"
-                    task["progress"] = 100.0
-                    task["speed"] = "0 B/s"
-                    self._trigger_comfy_refresh()
+                task["status"] = "COMPLETED"
+                task["progress"] = 100.0
+                task["speed"] = "0 B/s"
+                self._trigger_comfy_refresh()
             else:
                 task["status"] = "FAILED"
                 task["error_msg"] = f"aria2 进程非正常退出，代码: {return_code}"
 
         except (OSError, subprocess.SubprocessError) as e:
             task["status"] = "FAILED"
-            task["error_msg"] = f"启动或执行 aria2 失败: {e}"
+            task["error_msg"] = f"执行 aria2 失败: {e}"
 
     def _run_python_stream_task(self, task_id, final_url, target_dir, file_name):
         task = self.tasks[task_id]
@@ -431,22 +415,14 @@ class DownloaderCore:
                 if os.path.exists(temp_file_path):
                     os.remove(temp_file_path)
             else:
-                # 【防伪体检】
-                is_valid, err_reason = self._validate_downloaded_file(temp_file_path)
-                if not is_valid:
-                    task["status"] = "FAILED"
-                    task["error_msg"] = err_reason
-                    if os.path.exists(temp_file_path):
-                        os.remove(temp_file_path)
-                else:
-                    if os.path.exists(final_file_path):
-                        os.remove(final_file_path)
-                    os.replace(temp_file_path, final_file_path)
+                if os.path.exists(final_file_path):
+                    os.remove(final_file_path)
+                os.replace(temp_file_path, final_file_path)
 
-                    task["status"] = "COMPLETED"
-                    task["progress"] = 100.0
-                    task["speed"] = "0 B/s"
-                    self._trigger_comfy_refresh()
+                task["status"] = "COMPLETED"
+                task["progress"] = 100.0
+                task["speed"] = "0 B/s"
+                self._trigger_comfy_refresh()
 
         except (
             urllib.error.URLError,
@@ -459,7 +435,7 @@ class DownloaderCore:
             if os.path.exists(temp_file_path):
                 os.remove(temp_file_path)
 
-    # ==================== 1.4 状态机与接口 ====================
+    # ==================== 状态机与接口 ====================
     def _trigger_comfy_refresh(self):
         if folder_paths and hasattr(folder_paths, "cache"):
             try:
@@ -478,6 +454,7 @@ class DownloaderCore:
         hf_use_mirror = params.get("hf_use_mirror", True)
         aria2_path_input = params.get("aria2_path", "")
         download_engine = params.get("download_engine", "aria2 (CLI)")
+        conflict_action = params.get("conflict_action", "overwrite")
 
         task = {
             "id": task_id,
@@ -511,6 +488,12 @@ class DownloaderCore:
                     )
                 )
 
+                # 处理同名重命名
+                if conflict_action == "rename" and os.path.exists(
+                    os.path.join(target_dir, file_name)
+                ):
+                    file_name = self._generate_unique_filename(target_dir, file_name)
+
                 task["file_name"] = file_name
                 task["save_dir"] = target_dir
                 task["category"] = model_category
@@ -527,14 +510,11 @@ class DownloaderCore:
                         file_name,
                     )
                 else:
-                    if "aria2" in download_engine and not detected_aria2:
-                        print(
-                            "[Universal-Downloader] ⚠️ 未探测到有效 aria2c，已自动降级为 Python 原生流式下载！"
-                        )
-                        task["engine"] = "Python (自动降级流式)"
-                    else:
-                        task["engine"] = "Python (原生流式)"
-
+                    task["engine"] = (
+                        "Python (自动降级流式)"
+                        if "aria2" in download_engine
+                        else "Python (原生流式)"
+                    )
                     self._run_python_stream_task(
                         task_id, final_url, target_dir, file_name
                     )
@@ -566,6 +546,20 @@ class DownloaderCore:
                     pass
             task["status"] = "CANCELLED"
             task["speed"] = "0 B/s"
+
+            # 立即物理删除半成品
+            if task.get("save_dir") and task.get("file_name"):
+                target_file = os.path.join(task["save_dir"], task["file_name"])
+                for f_path in (
+                    target_file,
+                    f"{target_file}.aria2",
+                    f"{target_file}.downloading",
+                ):
+                    if os.path.exists(f_path):
+                        try:
+                            os.remove(f_path)
+                        except OSError:
+                            pass
             return True
         return False
 
