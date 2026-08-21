@@ -74,6 +74,44 @@ class DownloaderCore:
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/122.0.0.0 Safari/537.36"
         )
+        self.config_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "downloader_config.json"
+        )
+
+    # ==================== 服务端配置持久化 ====================
+    def load_config(self):
+        default_cfg = {
+            "civitai_token": "",
+            "aria2_path": "",
+            "hf_use_mirror": True,
+        }
+        if not os.path.isfile(self.config_path):
+            return default_cfg
+        try:
+            with open(self.config_path, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+                default_cfg.update(saved)
+                return default_cfg
+        except (
+            OSError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            ValueError,
+            TypeError,
+        ) as e:
+            print(f"[Universal-Downloader] 读取配置失败: {e}")
+            return default_cfg
+
+    def save_config(self, new_cfg):
+        current_cfg = self.load_config()
+        current_cfg.update(new_cfg)
+        try:
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                json.dump(current_cfg, f, indent=4, ensure_ascii=False)
+            return True
+        except (OSError, TypeError, ValueError) as e:
+            print(f"[Universal-Downloader] 保存配置失败: {e}")
+            return False
 
     # ==================== 路径探测器 ====================
     def detect_aria2_path(self, custom_path=""):
@@ -327,7 +365,6 @@ class DownloaderCore:
                     else os.path.join(comfy_root, "models", "custom_downloads")
                 )
         else:
-            # 1. 确定基础模型类型对应目录
             if model_category == "auto":
                 model_category = "checkpoints"
             if folder_paths:
@@ -340,12 +377,10 @@ class DownloaderCore:
             else:
                 base_target_dir = os.path.join(comfy_root, "models", model_category)
 
-            # 2. 如果用户提供了 custom_path，支持在基础目录下追加子目录或绝对路径覆盖
             if user_path_input:
                 if os.path.isabs(user_path_input):
                     target_dir = os.path.abspath(user_path_input)
                 else:
-                    # 去除首尾多余斜杠，作为子目录安全拼接
                     clean_sub_path = user_path_input.strip("/\\")
                     target_dir = os.path.abspath(
                         os.path.join(base_target_dir, clean_sub_path)

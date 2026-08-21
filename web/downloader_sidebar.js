@@ -24,26 +24,6 @@ const ICONS = {
     edit: `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>`
 };
 
-const STORAGE_KEY = "comfy_universal_downloader_config";
-
-function loadUserConfig() {
-    try {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        return raw ? JSON.parse(raw) : {};
-    } catch {
-        return {};
-    }
-}
-
-function saveUserConfig(cfg) {
-    try {
-        const prev = loadUserConfig();
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...prev, ...cfg }));
-    } catch (e) {
-        console.warn("[Downloader] 保存配置失败:", e);
-    }
-}
-
 class UniversalDownloaderUI {
     constructor() {
         this.container = null;
@@ -52,6 +32,25 @@ class UniversalDownloaderUI {
         this.isModalOpen = false;
         this.activeConflictTasks = new Set();
         this.cachedTasksMap = new Map();
+
+        // 内存配置缓存
+        this.cachedServerConfig = {
+            civitai_token: "",
+            aria2_path: "",
+            hf_use_mirror: true
+        };
+    }
+
+    async initConfig() {
+        try {
+            const res = await fetch("/universal_downloader/api/config");
+            const data = await res.json();
+            if (data.success && data.config) {
+                this.cachedServerConfig = { ...this.cachedServerConfig, ...data.config };
+            }
+        } catch (e) {
+            console.warn("[Downloader] 初始化服务端配置失败:", e);
+        }
     }
 
     renderSidebar(container) {
@@ -303,7 +302,7 @@ class UniversalDownloaderUI {
         if (this.isModalOpen) return;
         this.isModalOpen = true;
 
-        const globalConfig = loadUserConfig();
+        const globalConfig = this.cachedServerConfig;
         const params = (isEdit && taskData && taskData.params) ? taskData.params : {};
 
         const initialUrl = params.url_or_air || (taskData ? taskData.url_or_air : "") || "";
@@ -435,11 +434,12 @@ class UniversalDownloaderUI {
                 hf_use_mirror: modalBackdrop.querySelector("#ud-in-hf-mirror").checked
             };
 
-            saveUserConfig({
+            // 即时更新前端内存缓存
+            this.cachedServerConfig = {
                 civitai_token: payload.civitai_token,
                 aria2_path: payload.aria2_path,
                 hf_use_mirror: payload.hf_use_mirror
-            });
+            };
 
             closeModal();
 
@@ -467,6 +467,10 @@ window.__ud_edit = (id) => downloaderUI.editTask(id);
 app.registerExtension({
     name: "Comfy.UniversalDownloader",
     async setup() {
+        // 1. 初始化时预拉取一次服务端持久化配置
+        await downloaderUI.initConfig();
+
+        // 2. 注册侧边栏 Tab
         if (app.extensionManager && typeof app.extensionManager.registerSidebarTab === "function") {
             app.extensionManager.registerSidebarTab({
                 id: "universal-downloader-tab",
@@ -477,6 +481,8 @@ app.registerExtension({
                 render: (el) => downloaderUI.renderSidebar(el)
             });
         }
+
+        // 3. 注册顶部栏快捷按钮
         const topbar = document.querySelector(".comfy-menu") || document.querySelector("#comfy-topbar");
         if (topbar && !document.querySelector("#ud-topbar-btn")) {
             const btn = document.createElement("button");

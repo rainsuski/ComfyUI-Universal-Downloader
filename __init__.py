@@ -9,6 +9,36 @@ downloader_core = DownloaderCore()
 routes = PromptServer.instance.app.router
 
 
+# 0. 配置读取与保存 API
+@PromptServer.instance.routes.get("/universal_downloader/api/config")
+async def handle_get_config(request):
+    try:
+        config = downloader_core.load_config()
+        return aiohttp.web.json_response({"success": True, "config": config})
+    except (OSError, json.JSONDecodeError, TypeError, ValueError) as e:
+        return aiohttp.web.json_response(
+            {"success": False, "error": f"读取配置失败: {e}"}, status=500
+        )
+
+
+@PromptServer.instance.routes.post("/universal_downloader/api/config")
+async def handle_save_config(request):
+    try:
+        data = await request.json()
+        success = downloader_core.save_config(data)
+        return aiohttp.web.json_response({"success": success})
+    except (
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+        AttributeError,
+        TypeError,
+        OSError,
+    ) as e:
+        return aiohttp.web.json_response(
+            {"success": False, "error": f"保存配置失败: {e}"}, status=500
+        )
+
+
 # 1. 提交下载任务
 @PromptServer.instance.routes.post("/universal_downloader/api/submit")
 async def handle_submit_task(request):
