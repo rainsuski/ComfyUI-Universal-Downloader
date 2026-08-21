@@ -282,10 +282,20 @@ class UniversalDownloaderUI {
             if (e.target === modalBackdrop) closeModal();
         };
 
+        // 提交表单校验
         modalBackdrop.querySelector("#ud-modal-submit-btn").onclick = async () => {
             const url_or_air = modalBackdrop.querySelector("#ud-in-url").value.trim();
+            const civitai_token = modalBackdrop.querySelector("#ud-in-token").value.trim();
+
             if (!url_or_air) {
                 alert("请输入资源地址 (url_or_air)!");
+                return;
+            }
+
+            // 【防坑拦截 1】如果是 C 站资源但没填 Token，直接拦截提醒
+            const isCivitai = url_or_air.includes("civitai") || url_or_air.startsWith("urn:air:") || /^\d+$/.test(url_or_air);
+            if (isCivitai && !civitai_token) {
+                alert("⚠️ 检测到当前为 Civitai (C站) 资源，必须填写 Civitai Token 才能正常下载！\n请在下方的 civitai_token 输入框中填入你的 Token。");
                 return;
             }
 
@@ -296,7 +306,7 @@ class UniversalDownloaderUI {
                 custom_path: modalBackdrop.querySelector("#ud-in-custom-path").value.trim(),
                 custom_filename: modalBackdrop.querySelector("#ud-in-custom-filename").value.trim(),
                 aria2_path: modalBackdrop.querySelector("#ud-in-aria2-path").value.trim(),
-                civitai_token: modalBackdrop.querySelector("#ud-in-token").value.trim(),
+                civitai_token: civitai_token,
                 hf_use_mirror: modalBackdrop.querySelector("#ud-in-hf-mirror").checked
             };
 

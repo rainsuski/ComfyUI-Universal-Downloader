@@ -27,19 +27,51 @@ class DownloaderCore:
     def __new__(cls):
         with cls._lock:
             if cls._instance is None:
-                # 优化: 采用现代 Python 3 无参 super()
                 cls._instance = super().__new__(cls)
                 cls._instance._init_manager()
             return cls._instance
 
     def _init_manager(self):
-        self.tasks = {}  # 保存所有任务: { task_id: task_dict }
+        self.tasks = {}
         self.fake_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
-    # ==================== 1.1 多平台 aria2 路径智能探测器 ====================
+    # ==================== 文件真伪体检机制 ====================
+    def _validate_downloaded_file(self, file_path):
+        """检查下载下来的文件是否为真实模型文件（防止下成 HTML 登录网页） 返回: (is_valid: bool, error_reason: str)"""
+        if not os.path.isfile(file_path):
+            return False, "下载文件不存在或已被移走"
+
+        file_size = os.path.getsize(file_path)
+
+        # 检查文件大小与前 512 字节内容
+        try:
+            with open(file_path, "rb") as f:
+                header = f.read(512).lower()
+
+            # 如果检测到 HTML 标签或登录特征
+            if any(
+                tag in header
+                for tag in (b"<!doctype html", b"<html", b"<head", b"<body")
+            ):
+                return (
+                    False,
+                    "服务器返回了登录鉴权网页 (HTML)，Civitai Token 无效或未提供！",
+                )
+
+            # safetensors 或模型文件通常不可能小于 50KB 且带文本特征
+            if file_size < 50 * 1024 and (b"civitai" in header or b"login" in header):
+                return (
+                    False,
+                    "文件校验失败: 返回了非模型数据，请检查 Token 权限！",
+                )
+
+        except (OSError, UnicodeDecodeError) as e:
+            return False, f"文件校验异常: {e}"
+
+        return True, ""
+
+    # ==================== 1.1 多平台 aria2 路径探测器 ====================
     def detect_aria2_path(self, custom_path=""):
-        """探测优先级: 1. 用户自定义手动指定 2. 系统全局环境变量 PATH 3. 自动嗅探 Motrix 常见默认安装路径 4. 未找到 (返回 None)"""
-        # 1. 用户手动指定
         if custom_path and custom_path.strip():
             c_path = os.path.expanduser(custom_path.strip())
             if os.path.isfile(c_path):
@@ -48,12 +80,10 @@ class DownloaderCore:
                 if os.access(c_path, os.X_OK):
                     return c_path
 
-        # 2. 系统全局环境变量 PATH
         sys_aria = shutil.which("aria2c")
         if sys_aria:
             return sys_aria
 
-        # 3. 自动嗅探 Windows 下 Motrix 常见安装路径
         if sys.platform.startswith("win"):
             possible_motrix_paths = [
                 os.path.expandvars(
@@ -68,14 +98,13 @@ class DownloaderCore:
             for m_path in possible_motrix_paths:
                 if os.path.isfile(m_path):
                     print(
-                        f"[Universal-Downloader] ⚡ 自动探测到 Motrix 内置 aria2 引擎: {m_path}"
+                        f"[Universal-Downloader] ⚡ 自动探测到 Motrix 内置 aria2: {m_path}"
                     )
                     return m_path
 
-        # 4. 未找到
         return None
 
-    # ==================== 1.2 资源链接与元数据解析内核 ====================
+    # ==================== 1.2 资源链接与元数据解析 ====================
     def parse_resource_info(
         self,
         url_or_air,
@@ -85,13 +114,12 @@ class DownloaderCore:
         civitai_token="",
         hf_use_mirror=True,
     ):
-        """解析输入资源，返回: (final_url, final_filename, target_dir, model_category)"""
         input_str = url_or_air.strip()
         final_url = ""
         file_name = custom_filename.strip()
         model_category = target_type
 
-        # ---------- A. Hugging Face 链接解析 ----------
+        # A. Hugging Face
         if "huggingface.co" in input_str or "hf-mirror.com" in input_str:
             clean_url = input_str.split("?")[0]
             if not file_name:
@@ -124,12 +152,15 @@ class DownloaderCore:
                 else:
                     model_category = "checkpoints"
 
-        # ---------- B. Civitai (C站) 链接 / AIR / 纯 ID 解析 ----------
+        # B. Civitai
         elif (
             "civitai" in input_str
             or input_str.isdigit()
             or input_str.startswith("urn:air:")
         ):
+            if not civitai_token.strip():
+                raise ValueError("下载 Civitai (C站) 模型必须提供 Civitai Token！")
+
             version_id = None
             air_match = re.search(
                 r"urn:air:([^:]+):([^:]+):civitai:([0-9]+)(@([0-9]+))?",
@@ -162,13 +193,13 @@ class DownloaderCore:
                 if m:
                     version_id = m.group(1)
 
-            # 调用 C 站官方 API 获取真实文件名与 downloadUrl
             if version_id:
                 api_meta_url = f"https://civitai.com/api/v1/model-versions/{version_id}"
                 try:
-                    headers = {"User-Agent": self.fake_ua}
-                    if civitai_token.strip():
-                        headers["Authorization"] = f"Bearer {civitai_token.strip()}"
+                    headers = {
+                        "User-Agent": self.fake_ua,
+                        "Authorization": f"Bearer {civitai_token.strip()}",
+                    }
                     req = urllib.request.Request(api_meta_url, headers=headers)
                     with urllib.request.urlopen(req, timeout=6) as response:
                         meta = json.loads(response.read().decode())
@@ -198,7 +229,7 @@ class DownloaderCore:
                 sep = "&" if "?" in final_url else "?"
                 final_url = f"{final_url}{sep}token={civitai_token.strip()}"
 
-            # 提前发起 HEAD 请求预解析 307 重定向，抓取 Cloudflare R2 直链
+            # 预解析 HEAD 并防范重定向到登录页
             try:
                 head_req = urllib.request.Request(
                     final_url,
@@ -206,16 +237,22 @@ class DownloaderCore:
                     method="HEAD",
                 )
                 with urllib.request.urlopen(head_req, timeout=6) as head_resp:
-                    final_url = head_resp.geturl()
+                    resolved_url = head_resp.geturl()
+                    if "/login" in resolved_url or "civitai.com/login" in resolved_url:
+                        raise ValueError(
+                            "Civitai Token 鉴权失败或已过期 (被重定向至登录页)"
+                        )
+                    final_url = resolved_url
             except (
                 urllib.error.URLError,
                 urllib.error.HTTPError,
                 TimeoutError,
                 OSError,
-            ):
-                pass
+            ) as e:
+                if "Token 鉴权失败" in str(e):
+                    raise
 
-        # ---------- C. 通用直链 / GitHub Releases 解析 ----------
+        # C. 通用直链 / GitHub Releases
         else:
             final_url = input_str
             clean_name = input_str.split("?")[0].rstrip("/").split("/")[-1]
@@ -224,7 +261,7 @@ class DownloaderCore:
             if model_category == "auto":
                 model_category = "custom_path"
 
-        # ---------- D. 最终保存路径计算 ----------
+        # D. 路径计算
         comfy_root = (
             os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
             if "__file__" in locals()
@@ -260,8 +297,9 @@ class DownloaderCore:
 
     # ==================== 1.3 双引擎执行逻辑 ====================
     def _run_aria2_task(self, task_id, aria2_bin, final_url, target_dir, file_name):
-        """引擎 A: aria2c (CLI) 执行与标准输出实时解析"""
         task = self.tasks[task_id]
+        final_file_path = os.path.join(target_dir, file_name)
+
         cmd = [
             aria2_bin,
             "-c",
@@ -315,10 +353,18 @@ class DownloaderCore:
                 task["status"] = "CANCELLED"
                 task["speed"] = "0 B/s"
             elif return_code == 0:
-                task["status"] = "COMPLETED"
-                task["progress"] = 100.0
-                task["speed"] = "0 B/s"
-                self._trigger_comfy_refresh()
+                # 【防伪体检】校验下载下来的文件是不是 HTML 网页
+                is_valid, err_reason = self._validate_downloaded_file(final_file_path)
+                if not is_valid:
+                    task["status"] = "FAILED"
+                    task["error_msg"] = err_reason
+                    if os.path.exists(final_file_path):
+                        os.remove(final_file_path)  # 彻底销毁 10KB 假文件
+                else:
+                    task["status"] = "COMPLETED"
+                    task["progress"] = 100.0
+                    task["speed"] = "0 B/s"
+                    self._trigger_comfy_refresh()
             else:
                 task["status"] = "FAILED"
                 task["error_msg"] = f"aria2 进程非正常退出，代码: {return_code}"
@@ -328,7 +374,6 @@ class DownloaderCore:
             task["error_msg"] = f"启动或执行 aria2 失败: {e}"
 
     def _run_python_stream_task(self, task_id, final_url, target_dir, file_name):
-        """引擎 B: Python 原生流式切片下载 (带原子写入与取消保护)"""
         task = self.tasks[task_id]
         temp_file_path = os.path.join(target_dir, f"{file_name}.downloading")
         final_file_path = os.path.join(target_dir, file_name)
@@ -347,7 +392,7 @@ class DownloaderCore:
                 task["status"] = "DOWNLOADING"
 
                 downloaded = 0
-                chunk_size = 1024 * 1024  # 1MB 块
+                chunk_size = 1024 * 1024
                 last_time = time.time()
                 last_downloaded = 0
 
@@ -386,14 +431,22 @@ class DownloaderCore:
                 if os.path.exists(temp_file_path):
                     os.remove(temp_file_path)
             else:
-                if os.path.exists(final_file_path):
-                    os.remove(final_file_path)
-                os.replace(temp_file_path, final_file_path)
+                # 【防伪体检】
+                is_valid, err_reason = self._validate_downloaded_file(temp_file_path)
+                if not is_valid:
+                    task["status"] = "FAILED"
+                    task["error_msg"] = err_reason
+                    if os.path.exists(temp_file_path):
+                        os.remove(temp_file_path)
+                else:
+                    if os.path.exists(final_file_path):
+                        os.remove(final_file_path)
+                    os.replace(temp_file_path, final_file_path)
 
-                task["status"] = "COMPLETED"
-                task["progress"] = 100.0
-                task["speed"] = "0 B/s"
-                self._trigger_comfy_refresh()
+                    task["status"] = "COMPLETED"
+                    task["progress"] = 100.0
+                    task["speed"] = "0 B/s"
+                    self._trigger_comfy_refresh()
 
         except (
             urllib.error.URLError,
@@ -406,9 +459,8 @@ class DownloaderCore:
             if os.path.exists(temp_file_path):
                 os.remove(temp_file_path)
 
-    # ==================== 1.4 状态机与任务调度接口 ====================
+    # ==================== 1.4 状态机与接口 ====================
     def _trigger_comfy_refresh(self):
-        """通知 ComfyUI 后端内存重新扫描模型文件 (非刷新网页)"""
         if folder_paths and hasattr(folder_paths, "cache"):
             try:
                 folder_paths.cache.clear()
@@ -416,7 +468,6 @@ class DownloaderCore:
                 print(f"[Universal-Downloader] 刷新模型缓存提示: {e}")
 
     def create_task(self, params):
-        """创建并启动一个异步下载任务"""
         task_id = f"task_{uuid.uuid4().hex[:8]}"
 
         url_or_air = params.get("url_or_air", "")
@@ -449,7 +500,6 @@ class DownloaderCore:
 
         def _worker():
             try:
-                # 1. 深度解析直链与文件名
                 final_url, file_name, target_dir, model_category = (
                     self.parse_resource_info(
                         url_or_air=url_or_air,
@@ -465,7 +515,6 @@ class DownloaderCore:
                 task["save_dir"] = target_dir
                 task["category"] = model_category
 
-                # 2. 检查 aria2 路径并决定执行引擎
                 detected_aria2 = self.detect_aria2_path(aria2_path_input)
 
                 if "aria2" in download_engine and detected_aria2:
@@ -480,7 +529,7 @@ class DownloaderCore:
                 else:
                     if "aria2" in download_engine and not detected_aria2:
                         print(
-                            "[Universal-Downloader] ⚠️ 未探测到有效 aria2c，已自动无缝降级为 Python 原生流式下载！"
+                            "[Universal-Downloader] ⚠️ 未探测到有效 aria2c，已自动降级为 Python 原生流式下载！"
                         )
                         task["engine"] = "Python (自动降级流式)"
                     else:
@@ -507,7 +556,6 @@ class DownloaderCore:
         return task_id
 
     def cancel_task(self, task_id):
-        """取消指定任务"""
         if task_id in self.tasks:
             task = self.tasks[task_id]
             task["cancel_flag"] = True
@@ -522,7 +570,6 @@ class DownloaderCore:
         return False
 
     def get_all_tasks(self):
-        """获取所有任务清单（已清理不可序列化对象）"""
         clean_tasks = []
         for t in self.tasks.values():
             t_copy = t.copy()
@@ -532,7 +579,6 @@ class DownloaderCore:
         return clean_tasks
 
     def clear_finished(self):
-        """清理已完成、已失败或已取消的历史任务"""
         to_delete = [
             tid
             for tid, t in self.tasks.items()
