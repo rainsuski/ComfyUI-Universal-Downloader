@@ -359,12 +359,13 @@ class DownloaderCore:
         # D. 保存路径推导
         comfy_root = (
             os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-            if "__file__" in locals()
+            if "__file__" in globals()
             else os.getcwd()
         )
 
         user_path_input = custom_path.strip()
 
+        # 模式一：明确指定为完整自定义路径
         if model_category == "custom_path" or target_type == "custom_path":
             if user_path_input:
                 target_dir = (
@@ -378,6 +379,7 @@ class DownloaderCore:
                     if folder_paths
                     else os.path.join(comfy_root, "models", "custom_downloads")
                 )
+        # 模式二：分类目录模式 (checkpoints, loras, vae, etc.)
         else:
             if model_category == "auto":
                 model_category = "checkpoints"
@@ -391,14 +393,12 @@ class DownloaderCore:
             else:
                 base_target_dir = os.path.join(comfy_root, "models", model_category)
 
+            # 在分类模式下，无论用户是否输入了前导斜杠（如 /anima），均视为相对子目录拼接
             if user_path_input:
-                if os.path.isabs(user_path_input):
-                    target_dir = os.path.abspath(user_path_input)
-                else:
-                    clean_sub_path = user_path_input.strip("/\\")
-                    target_dir = os.path.abspath(
-                        os.path.join(base_target_dir, clean_sub_path)
-                    )
+                clean_sub_path = user_path_input.strip("/\\")
+                target_dir = os.path.abspath(
+                    os.path.join(base_target_dir, clean_sub_path)
+                )
             else:
                 target_dir = base_target_dir
 
