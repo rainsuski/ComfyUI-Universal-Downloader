@@ -1,5 +1,17 @@
 <div align="center">
 
+# ⚡ ComfyUI Universal Downloader
+
+**现代化侧边栏模型资产极速下载管理扩展 | A Modern, Native Download Manager Extension for ComfyUI**
+
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
+[![ComfyUI](https://img.shields.io/badge/ComfyUI-Extension-orange.svg)](https://github.com/comfyanonymous/ComfyUI)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)]()
+
+[简体中文](./README.md) | [English](./README_EN.md)
+
+</div>
 ---
 
 ## 核心特性
