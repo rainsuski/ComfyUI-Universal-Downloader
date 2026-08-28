@@ -51,7 +51,7 @@
 
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/你的用户名/ComfyUI-Universal-Downloader.git
+git clone https://github.com/rainsuski/ComfyUI-Universal-Downloader.git
 ```
 
 ### 方法二：手动安装
