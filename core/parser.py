@@ -1,3 +1,4 @@
+# core/parser.py
 import json
 import os
 import re
@@ -12,7 +13,7 @@ except ImportError:
 
 
 class ResourceParser:
-    """资源地址与分类解析器 (支持 Civitai AIR、HF Mirror 加速与普适直链解析)"""
+    """资源地址与分类解析器 (支持 Civitai AIR、HF Mirror 加速、DiT/Diffusion 智能归类与普适直链解析)"""
 
     def __init__(self, fake_ua):
         self.fake_ua = fake_ua
@@ -55,20 +56,35 @@ class ResourceParser:
 
             if model_category == "auto":
                 low = input_str.lower()
-                if any(k in low for k in ["text_encoder", "qwen_3", "clip"]):
+                if any(
+                    k in low
+                    for k in ["text_encoder", "text_encoders", "qwen_3", "clip", "t5"]
+                ):
                     model_category = "text_encoders"
                 elif "vae" in low:
                     model_category = "vae"
-                elif any(k in low for k in ["diffusion_models", "unet", "anima"]):
+                elif any(
+                    k in low
+                    for k in [
+                        "diffusion_models",
+                        "diffusion_model",
+                        "unet",
+                        "dit",
+                        "flux",
+                        "anima",
+                    ]
+                ):
                     model_category = "diffusion_models"
-                elif "lora" in low:
+                elif any(k in low for k in ["lora", "locon", "dora"]):
                     model_category = "loras"
                 elif "controlnet" in low:
                     model_category = "controlnet"
-                elif "checkpoint" in low:
-                    model_category = "checkpoints"
                 elif "upscale" in low:
                     model_category = "upscale_models"
+                elif any(k in low for k in ["embedding", "textual"]):
+                    model_category = "embeddings"
+                elif "checkpoint" in low:
+                    model_category = "checkpoints"
                 else:
                     model_category = "checkpoints"
 
@@ -93,14 +109,26 @@ class ResourceParser:
                 if model_category == "auto":
                     if m_type == "checkpoint":
                         model_category = "checkpoints"
-                    elif m_type in ("lora", "locon"):
+                    elif m_type in ("lora", "locon", "dora"):
                         model_category = "loras"
                     elif m_type == "vae":
                         model_category = "vae"
+                    elif m_type in (
+                        "diffusionmodel",
+                        "diffusion_models",
+                        "diffusion_model",
+                        "unet",
+                        "dit",
+                    ):
+                        model_category = "diffusion_models"
+                    elif m_type in ("textencoder", "text_encoders", "clip", "t5"):
+                        model_category = "text_encoders"
                     elif m_type == "controlnet":
                         model_category = "controlnet"
-                    elif m_type == "upscaler":
+                    elif m_type in ("upscaler", "upscale_models"):
                         model_category = "upscale_models"
+                    elif m_type in ("embedding", "textualinversion", "embeddings"):
+                        model_category = "embeddings"
             elif "modelVersionId=" in input_str:
                 m = re.search(r"modelVersionId=(\d+)", input_str)
                 if m:
@@ -165,6 +193,13 @@ class ResourceParser:
                                 model_category = "loras"
                             elif "vae" in m_type:
                                 model_category = "vae"
+                            elif any(k in m_type for k in ["diffusion", "unet", "dit"]):
+                                model_category = "diffusion_models"
+                            elif any(
+                                k in m_type
+                                for k in ["text_encoder", "textencoder", "clip", "t5"]
+                            ):
+                                model_category = "text_encoders"
                             elif "controlnet" in m_type:
                                 model_category = "controlnet"
                             elif "upscale" in m_type:
@@ -238,19 +273,40 @@ class ResourceParser:
                     if folder_paths
                     else os.path.join(comfy_root, "models", "custom_downloads")
                 )
-        # 模式二：分类目录模式 (checkpoints, loras, vae, etc.)
+        # 模式二：分类目录模式 (checkpoints, loras, vae, diffusion_models, etc.)
         else:
             if model_category == "auto":
                 model_category = "checkpoints"
+
+            # unet 规范化为 diffusion_models
+            effective_category = (
+                "diffusion_models" if model_category == "unet" else model_category
+            )
+            base_target_dir = None
+
             if folder_paths:
                 try:
-                    base_target_dir = folder_paths.get_folder_paths(model_category)[0]
+                    possible_paths = folder_paths.get_folder_paths(effective_category)
+                    if possible_paths:
+                        # 优先查找真正的 diffusion_models 目录，避免被旧版兼容的 unet 别名带偏
+                        for p in possible_paths:
+                            if (
+                                "diffusion_models"
+                                in os.path.basename(os.path.normpath(p)).lower()
+                            ):
+                                base_target_dir = p
+                                break
+                        if not base_target_dir:
+                            base_target_dir = possible_paths[0]
                 except (KeyError, IndexError, AttributeError):
+                    pass
+
+                if not base_target_dir:
                     base_target_dir = os.path.join(
-                        folder_paths.models_dir, model_category
+                        folder_paths.models_dir, effective_category
                     )
             else:
-                base_target_dir = os.path.join(comfy_root, "models", model_category)
+                base_target_dir = os.path.join(comfy_root, "models", effective_category)
 
             # 在分类模式下，无论用户是否输入了前导斜杠（如 /anima），均视为相对子目录拼接
             if user_path_input:
