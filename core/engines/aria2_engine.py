@@ -41,39 +41,128 @@ ARIA2_ERROR_CODES = {
 }
 
 
+def _is_valid_executable(path):
+    """校验目标文件是否存在且具有可执行属性"""
+    if not path or not os.path.isfile(path):
+        return False
+    if sys.platform.startswith("win"):
+        return path.lower().endswith(".exe") or os.access(path, os.X_OK)
+    return os.access(path, os.X_OK)
+
+
 def detect_aria2_path(custom_path=""):
-    """跨平台探测系统中可用的 aria2 可执行文件绝对路径"""
+    """跨平台智能探测系统中可用的 aria2 可执行文件绝对路径"""
+    # 1. 优先使用用户在前端设置中指定的自定义路径
     if custom_path and custom_path.strip():
         c_path = os.path.abspath(os.path.expanduser(custom_path.strip()))
-        if os.path.isfile(c_path):
-            if sys.platform.startswith("win"):
-                return c_path
-            # Linux / macOS / Unix 检查是否具有可执行权限
-            if os.access(c_path, os.X_OK):
-                return c_path
-            # 即使权限位偶有偏差也作为候选返回
+        if _is_valid_executable(c_path):
             return c_path
 
-    # 跨平台环境变量 PATH 查找 (Linux: /usr/bin/aria2c 等, Windows: PATH 中的 aria2c.exe)
+    # 2. 检查系统全局 PATH 环境变量
     sys_aria = shutil.which("aria2c")
-    if sys_aria:
+    if sys_aria and _is_valid_executable(sys_aria):
         return sys_aria
 
-    # Windows 常见应用内嵌路径兜底
-    if sys.platform.startswith("win"):
-        possible_motrix_paths = [
-            os.path.expandvars(
-                r"%LOCALAPPDATA%\Programs\Motrix\resources\engine\aria2c.exe"
-            ),
-            r"C:\Program Files\Motrix\resources\engine\aria2c.exe",
-            r"C:\Program Files (x86)\Motrix\resources\engine\aria2c.exe",
-            os.path.expandvars(
-                r"%APPDATA%\Local\Programs\Motrix\resources\engine\aria2c.exe"
-            ),
+    # 3. 检查当前 Python / Conda 虚拟环境 (兼容用户在 ComfyUI 环境下 conda install aria2)
+    py_env_dirs = [
+        sys.prefix,
+        getattr(sys, "base_prefix", sys.prefix),
+    ]
+    for env_dir in py_env_dirs:
+        candidates = [
+            os.path.join(env_dir, "bin", "aria2c"),
+            os.path.join(env_dir, "bin", "aria2c.exe"),
+            os.path.join(env_dir, "Scripts", "aria2c.exe"),
+            os.path.join(env_dir, "aria2c.exe"),
+            os.path.join(env_dir, "aria2c"),
         ]
-        for m_path in possible_motrix_paths:
-            if os.path.isfile(m_path):
-                return m_path
+        for cand in candidates:
+            if _is_valid_executable(cand):
+                return cand
+
+    # 4. 根据不同操作系统，深度扫描常见包管理器、客户端与绿色便携目录
+    search_paths = []
+
+    if sys.platform.startswith("win"):
+        user_profile = os.environ.get("USERPROFILE", "")
+        local_app_data = os.environ.get("LOCALAPPDATA", "")
+        app_data = os.environ.get("APPDATA", "")
+        prog_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+        prog_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+        prog_data = os.environ.get("ProgramData", r"C:\ProgramData")
+        sys_drive = os.environ.get("SystemDrive", "C:")
+
+        search_paths.extend(
+            [
+                # Motrix & Persepolis 等常见桌面下载工具内核
+                os.path.join(
+                    local_app_data, r"Programs\Motrix\resources\engine\aria2c.exe"
+                ),
+                os.path.join(
+                    app_data, r"Local\Programs\Motrix\resources\engine\aria2c.exe"
+                ),
+                os.path.join(prog_files, r"Motrix\resources\engine\aria2c.exe"),
+                os.path.join(prog_files_x86, r"Motrix\resources\engine\aria2c.exe"),
+                os.path.join(prog_files, r"Persepolis Download Manager\aria2c.exe"),
+                os.path.join(prog_files_x86, r"Persepolis Download Manager\aria2c.exe"),
+                os.path.join(
+                    local_app_data, r"Programs\Persepolis Download Manager\aria2c.exe"
+                ),
+                # 包管理器路径 (Scoop / Chocolatey)
+                os.path.join(user_profile, r"scoop\apps\aria2\current\aria2c.exe"),
+                os.path.join(user_profile, r"scoop\shims\aria2c.exe"),
+                os.path.join(prog_data, r"chocolatey\bin\aria2c.exe"),
+                os.path.join(prog_data, r"chocolatey\lib\aria2\tools\aria2c.exe"),
+                # 常见独立便携/绿色安装路径
+                os.path.join(sys_drive, r"\tools\aria2\aria2c.exe"),
+                os.path.join(sys_drive, r"\aria2\aria2c.exe"),
+                os.path.join(user_profile, r"aria2\aria2c.exe"),
+                os.path.join(user_profile, r"Downloads\aria2\aria2c.exe"),
+                os.path.join(user_profile, r".aria2\aria2c.exe"),
+                r"D:\tools\aria2\aria2c.exe",
+                r"D:\aria2\aria2c.exe",
+                r"E:\aria2\aria2c.exe",
+            ]
+        )
+
+    elif sys.platform.startswith("darwin"):
+        home = os.path.expanduser("~")
+        search_paths.extend(
+            [
+                # macOS Homebrew & MacPorts
+                "/opt/homebrew/bin/aria2c",
+                "/usr/local/bin/aria2c",
+                "/opt/local/bin/aria2c",
+                # macOS 应用程序内置内核
+                "/Applications/Motrix.app/Contents/Resources/engine/aria2c",
+                f"{home}/Applications/Motrix.app/Contents/Resources/engine/aria2c",
+                "/Applications/Persepolis Download Manager.app/Contents/Resources/aria2c",
+                f"{home}/.local/bin/aria2c",
+            ]
+        )
+
+    else:
+        # Linux / Unix / Docker 生产环境
+        home = os.path.expanduser("~")
+        search_paths.extend(
+            [
+                "/usr/bin/aria2c",
+                "/usr/local/bin/aria2c",
+                "/opt/aria2/aria2c",
+                "/opt/aria2c/bin/aria2c",
+                "/opt/Motrix/resources/engine/aria2c",
+                f"{home}/.local/bin/aria2c",
+                f"{home}/.linuxbrew/bin/aria2c",
+                "/home/linuxbrew/.linuxbrew/bin/aria2c",
+                "/var/lib/snapd/snap/bin/aria2c",
+                f"{home}/bin/aria2c",
+            ]
+        )
+
+    # 遍历候选列表，返回第一个通过验证的有效路径
+    for path in search_paths:
+        if path and _is_valid_executable(path):
+            return os.path.abspath(path)
 
     return None
 
