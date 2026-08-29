@@ -42,19 +42,24 @@ ARIA2_ERROR_CODES = {
 
 
 def detect_aria2_path(custom_path=""):
-    """探测系统中可用的 aria2 可执行文件绝对路径"""
+    """跨平台探测系统中可用的 aria2 可执行文件绝对路径"""
     if custom_path and custom_path.strip():
-        c_path = os.path.expanduser(custom_path.strip())
+        c_path = os.path.abspath(os.path.expanduser(custom_path.strip()))
         if os.path.isfile(c_path):
-            if sys.platform.startswith("win") and c_path.lower().endswith(".exe"):
+            if sys.platform.startswith("win"):
                 return c_path
+            # Linux / macOS / Unix 检查是否具有可执行权限
             if os.access(c_path, os.X_OK):
                 return c_path
+            # 即使权限位偶有偏差也作为候选返回
+            return c_path
 
+    # 跨平台环境变量 PATH 查找 (Linux: /usr/bin/aria2c 等, Windows: PATH 中的 aria2c.exe)
     sys_aria = shutil.which("aria2c")
     if sys_aria:
         return sys_aria
 
+    # Windows 常见应用内嵌路径兜底
     if sys.platform.startswith("win"):
         possible_motrix_paths = [
             os.path.expandvars(
@@ -82,7 +87,7 @@ def run_aria2_task(
     fake_ua,
     on_complete_callback=None,
 ):
-    """启动 Aria2 命令行子进程下载并实时解析日志输出 (支持断点续传)"""
+    """跨平台启动 Aria2 命令行子进程下载并实时解析日志输出 (支持断点续传与特殊编码容错)"""
     os.makedirs(target_dir, exist_ok=True)
 
     cmd = [
@@ -107,11 +112,13 @@ def run_aria2_task(
     ]
 
     try:
+        # 强制指定 encoding="utf-8" 与 errors="replace"，防止 Linux 简易环境/Docker 下解码崩溃
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            universal_newlines=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
         )
         task["process_ref"] = process
@@ -139,7 +146,6 @@ def run_aria2_task(
         if task["cancel_flag"]:
             task["status"] = "CANCELLED"
             task["speed"] = "0 B/s"
-            # 取消时保留进度文件与分块文件，支持重试续传
         elif return_code == 0:
             task["status"] = "COMPLETED"
             task["progress"] = 100.0
