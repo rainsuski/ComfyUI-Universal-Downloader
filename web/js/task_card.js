@@ -41,17 +41,11 @@ export function renderTaskList(taskListEl, tasks) {
         let actionsHtml = "";
         if (isRunning || task.status === "CONFLICT") {
             actionsHtml = `<button class="ud-btn-cancel" onclick="window.__ud_cancel('${task.id}')">取消下载</button>`;
-        } else if (task.status === "FAILED") {
+        } else if (task.status === "FAILED" || task.status === "CANCELLED") {
             actionsHtml = `
                 <button class="ud-btn-card-action ud-btn-retry" onclick="window.__ud_retry('${task.id}')">
                     ${ICONS.retry} <span>重试</span>
                 </button>
-                <button class="ud-btn-card-action ud-btn-edit-card" onclick="window.__ud_edit('${task.id}')">
-                    ${ICONS.edit} <span>编辑</span>
-                </button>
-            `;
-        } else if (task.status === "CANCELLED") {
-            actionsHtml = `
                 <button class="ud-btn-card-action ud-btn-edit-card" onclick="window.__ud_edit('${task.id}')">
                     ${ICONS.edit} <span>编辑</span>
                 </button>

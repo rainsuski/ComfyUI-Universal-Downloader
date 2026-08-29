@@ -6,3 +6,4 @@ __pycache__/
 *.log
 .DS_Store
 downloader_config.json
+downloader_tasks.json

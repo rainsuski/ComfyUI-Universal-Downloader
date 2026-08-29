@@ -1,3 +1,4 @@
+# core/engines/aria2_engine.py
 import os
 import re
 import shutil
@@ -81,9 +82,8 @@ def run_aria2_task(
     fake_ua,
     on_complete_callback=None,
 ):
-    """启动 Aria2 命令行子进程下载并实时解析日志输出"""
-    final_file_path = os.path.join(target_dir, file_name)
-    aria_control_file = f"{final_file_path}.aria2"
+    """启动 Aria2 命令行子进程下载并实时解析日志输出 (支持断点续传)"""
+    os.makedirs(target_dir, exist_ok=True)
 
     cmd = [
         aria2_bin,
@@ -139,10 +139,7 @@ def run_aria2_task(
         if task["cancel_flag"]:
             task["status"] = "CANCELLED"
             task["speed"] = "0 B/s"
-            if os.path.isfile(final_file_path):
-                os.remove(final_file_path)
-            if os.path.isfile(aria_control_file):
-                os.remove(aria_control_file)
+            # 取消时保留进度文件与分块文件，支持重试续传
         elif return_code == 0:
             task["status"] = "COMPLETED"
             task["progress"] = 100.0
@@ -151,9 +148,11 @@ def run_aria2_task(
                 on_complete_callback()
         else:
             task["status"] = "FAILED"
+            task["speed"] = "0 B/s"
             reason = ARIA2_ERROR_CODES.get(return_code, f"进程退出代码 {return_code}")
             task["error_msg"] = f"下载失败: {reason}"
 
     except (OSError, subprocess.SubprocessError) as e:
         task["status"] = "FAILED"
+        task["speed"] = "0 B/s"
         task["error_msg"] = f"执行 aria2 失败: {e}"

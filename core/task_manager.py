@@ -1,3 +1,5 @@
+# core/task_manager.py
+import json
 import logging
 import os
 import threading
@@ -20,7 +22,7 @@ except ImportError:
 
 class DownloaderCore:
     """Universal Downloader 核心调度器单例类
-    具备多源解析、进行中任务排他互斥锁、物理文件冲突隔离与即时状态断流
+    具备多源解析、进行中任务排他互斥锁、断点续传支持、物理文件冲突隔离与任务持久化
     """
 
     _instance = None
@@ -35,6 +37,7 @@ class DownloaderCore:
 
     def _init_manager(self):
         self.tasks = {}
+        self._task_lock = threading.Lock()
         self.fake_ua = (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -42,6 +45,60 @@ class DownloaderCore:
         )
         self.config_mgr = ConfigManager()
         self.parser = ResourceParser(self.fake_ua)
+
+        plugin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        self.tasks_path = os.path.join(plugin_root, "downloader_tasks.json")
+        self._load_tasks()
+
+    def _load_tasks(self):
+        """从持久化文件加载任务列表"""
+        if not os.path.isfile(self.tasks_path):
+            return
+
+        try:
+            with open(self.tasks_path, "r", encoding="utf-8") as f:
+                saved_tasks = json.load(f)
+
+            if isinstance(saved_tasks, dict):
+                for tid, task in saved_tasks.items():
+                    if task.get("status") in ("DOWNLOADING", "PARSING", "CONFLICT"):
+                        task["status"] = "CANCELLED"
+                        task["error_msg"] = (
+                            "ComfyUI 服务重启，下载已中止，可点击重试断点续传"
+                        )
+                        task["speed"] = "0 B/s"
+
+                    task["process_ref"] = None
+                    task["conflict_event"] = threading.Event()
+                    task["cancel_flag"] = False
+
+                    self.tasks[tid] = task
+        except (
+            OSError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            ValueError,
+            TypeError,
+        ) as e:
+            logger.error(f"[Universal-Downloader] 加载持久化任务异常: {e}")
+
+    def _save_tasks(self):
+        """将当前任务列表原子写入本地文件持久化"""
+        try:
+            tasks_data = {}
+            with self._task_lock:
+                for tid, t in self.tasks.items():
+                    t_copy = t.copy()
+                    t_copy.pop("process_ref", None)
+                    t_copy.pop("conflict_event", None)
+                    tasks_data[tid] = t_copy
+
+            temp_path = f"{self.tasks_path}.tmp"
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(tasks_data, f, indent=4, ensure_ascii=False)
+            os.replace(temp_path, self.tasks_path)
+        except (OSError, TypeError, ValueError) as e:
+            logger.error(f"[Universal-Downloader] 保存持久化任务失败: {e}")
 
     def load_config(self):
         return self.config_mgr.load_config()
@@ -111,6 +168,7 @@ class DownloaderCore:
                 task["save_dir"] = target_dir
                 task["category"] = model_category
                 target_file_path = os.path.join(target_dir, file_name)
+                aria_control_file = f"{target_file_path}.aria2"
 
                 if not file_name or not file_name.strip():
                     raise ValueError("未能获取到有效的文件名，无法启动下载！")
@@ -139,7 +197,9 @@ class DownloaderCore:
                                 )
 
                 # 关卡 3: 本地已有物理文件冲突检测
-                if os.path.isfile(target_file_path):
+                # 如果文件存在但伴随 .aria2 控制文件，说明是未完成的断点续传文件，不触发冲突弹窗
+                is_aria2_incomplete = os.path.isfile(aria_control_file)
+                if os.path.isfile(target_file_path) and not is_aria2_incomplete:
                     size_bytes = os.path.getsize(target_file_path)
                     size_str = (
                         f"{round(size_bytes / (1024 * 1024 * 1024), 2)} GB"
@@ -153,6 +213,7 @@ class DownloaderCore:
                         "file_size": size_str,
                         "full_path": target_file_path,
                     }
+                    self._save_tasks()
 
                     resolved = task["conflict_event"].wait(timeout=600)
 
@@ -224,6 +285,8 @@ class DownloaderCore:
             ) as e:
                 task["status"] = "FAILED"
                 task["error_msg"] = str(e)
+            finally:
+                self._save_tasks()
 
         thread = threading.Thread(target=_worker, daemon=True)
         thread.start()
@@ -263,6 +326,7 @@ class DownloaderCore:
             "created_at": time.time(),
         }
         self.tasks[task_id] = task
+        self._save_tasks()
         self._start_task_thread(task_id)
         return task_id
 
@@ -272,11 +336,7 @@ class DownloaderCore:
 
         task = self.tasks[task_id]
         task["status"] = "PARSING"
-        task["file_name"] = "正在解析资源..."
-        task["progress"] = 0.0
         task["speed"] = "0 B/s"
-        task["downloaded"] = "0 MB"
-        task["total"] = "0 MB"
         task["error_msg"] = ""
         task["cancel_flag"] = False
         task["process_ref"] = None
@@ -284,6 +344,7 @@ class DownloaderCore:
         task["conflict_action"] = None
         task["conflict_event"] = threading.Event()
 
+        self._save_tasks()
         self._start_task_thread(task_id)
         return True
 
@@ -309,6 +370,7 @@ class DownloaderCore:
         task["conflict_action"] = None
         task["conflict_event"] = threading.Event()
 
+        self._save_tasks()
         self._start_task_thread(task_id)
         return True
 
@@ -321,6 +383,7 @@ class DownloaderCore:
             else:
                 task["status"] = "DOWNLOADING"
             task["conflict_event"].set()
+            self._save_tasks()
             return True
         return False
 
@@ -339,18 +402,8 @@ class DownloaderCore:
             task["status"] = "CANCELLED"
             task["speed"] = "0 B/s"
 
-            if task.get("save_dir") and task.get("file_name"):
-                target_file = os.path.join(task["save_dir"], task["file_name"])
-                for f_path in (
-                    target_file,
-                    f"{target_file}.aria2",
-                    f"{target_file}.downloading",
-                ):
-                    if os.path.isfile(f_path):
-                        try:
-                            os.remove(f_path)
-                        except OSError:
-                            pass
+            # 取消操作只中止下载，不删除本地临时分块文件，保留重试断点续传的能力
+            self._save_tasks()
             return True
         return False
 
@@ -365,11 +418,30 @@ class DownloaderCore:
         return clean_tasks
 
     def clear_finished(self):
+        """清理已完成、已取消或失败的任务，并释放未完成的临时文件"""
         to_delete = [
             tid
             for tid, t in self.tasks.items()
             if t["status"] in ("COMPLETED", "FAILED", "CANCELLED")
         ]
         for tid in to_delete:
+            task = self.tasks[tid]
+            # 当用户主动清除记录时，顺带清理未完成的临时分块以释放空间
+            if task.get("status") in ("CANCELLED", "FAILED"):
+                save_dir = task.get("save_dir", "")
+                file_name = task.get("file_name", "")
+                if save_dir and file_name:
+                    target_file = os.path.join(save_dir, file_name)
+                    for f_path in (
+                        f"{target_file}.downloading",
+                        f"{target_file}.aria2",
+                    ):
+                        if os.path.isfile(f_path):
+                            try:
+                                os.remove(f_path)
+                            except OSError:
+                                pass
             del self.tasks[tid]
+
+        self._save_tasks()
         return len(to_delete)
