@@ -12,6 +12,7 @@
 [简体中文](./README.md) | [English](./README_EN.md)
 
 </div>
+
 ---
 
 ## 核心特性
@@ -19,27 +20,31 @@
 ### 1. 全来源格式解析
 
 * **Civitai (C 站)**：
-  * 支持 **AIR 编码**（如 `urn:air:anima:lora:civitai:2736763@3077360`，该格式无法获取准确的变体ID，仅推荐在没有多个变体的情况下使用）；
-  * 支持 **模型页面 URL**、**API 下载直链**；
+  * 支持 **AIR 编码**（如 `urn:air:anima:lora:civitai:2736763@3077360`）；
+  * 支持 **模型页面 URL**、**API 下载直链**（支持携带 Token 自动匹配精准版本文件）。
 * **Hugging Face**：
-  * 自动将浏览器复制的 `/blob/` 页面链接转换为 `/resolve/` 下载直链；
-  * 内置 **国内镜像加速 (`hf-mirror.com`)** 一键开关。
-* **GitHub Releases / 通用直链**：支持任意软件、插件压缩包及第三方直链高速下载。
+  * 自动将浏览器复制的 `/blob/` 页面预览链接转换为 `/resolve/` 下载直链；
+* **GitHub Releases / 通用直链**：支持任意软件、节点压缩包及第三方直链高速下载。
 
-### 2. 下载引擎
+### 2. 双下载引擎与智能调度
 
-* **主力引擎：`aria2 (CLI)`**
-* **路径**：
-  $$
-  \text{用户手动指定路径} \longrightarrow \text{系统全局环境变量 PATH} \longrightarrow \text{自动嗅探 Windows 下 Motrix 内置引擎} \longrightarrow \text{自动优雅降级}
-  $$
-* **`Python 原生流式`**
+* **主力引擎：`aria2 (CLI)`**（多线程极速并发）
+  * **智能跨平台探测链路**：
+    $$
+    \text{自定义路径} \longrightarrow \text{系统 PATH} \longrightarrow \text{Conda/Python 虚拟环境} \longrightarrow \text{常见客户端/包管理器内核 (Motrix等)} \longrightarrow \text{优雅降级}
+    $$
+* **兜底引擎：`Python 原生流式`**
   * 零前置依赖，开箱即用；
-  * 采用 `.downloading` 临时后缀的**原子写入机制（Atomic Write）**，下载未完成或异常中断绝不产生损坏假模型。
+  * 采用 `.downloading` 临时后缀的**原子写入机制（Atomic Write）**，下载未完成绝不产生损坏假模型。
 
-### 3. 模型自动归类
+### 3. 断点续传
 
-* 自动识别模型类型并分流存入对应目录：`checkpoints`、`loras`、`vae`、`text_encoders`、`diffusion_models`、`controlnet`、`upscale_models`（亦支持自定义绝对/相对路径）；
+* **全链路断点续传**：支持 HTTP Range 协议与 aria2 进度控制，无论是手动中止、网络波动还是下载失败，均可随时重试并继续下载；
+
+### 4. 模型智能归类与缓存刷新
+
+* 自动识别模型类别并分流存入对应目录：`checkpoints`、`loras`、`vae`、`text_encoders`、`diffusion_models`、`controlnet`、`upscale_models`（亦支持自定义绝对/相对子路径）；
+* 下载完成后**自动触发 ComfyUI 模型缓存刷新**，无需重启服务即可在节点加载器中立刻选到新模型。
 
 ---
 
@@ -82,20 +87,18 @@ git clone https://github.com/rainsuski/ComfyUI-Universal-Downloader.git
 
 #### Q1: 提示 `⚠️ 未探测到有效 aria2c，已自动无缝降级为 Python 原生流式下载`？
 
-* **说明**：系统未检测到 `aria2c` 执行程序，但依然可以通过 Python 原生下载完成任务。
-* **提升下载速度建议**：
-  * **如果你装了 Motrix**：在弹窗的 `aria2_path` 里填入 Motrix 自带的 `aria2c.exe` 路径（通常在 `C:\Users\你的用户名\AppData\Local\Programs\Motrix\resources\engine\aria2c.exe`）；
-  * **全局安装**：
-    * Windows: 在 PowerShell 运行 `winget install aria2.aria2`
-    * Linux: `apt update && apt install -y aria2`
-    * macOS: `brew install aria2`
+* **说明**：插件会自动扫描系统环境变量、Conda 虚拟环境及常用客户端（如 Motrix 等），若均未安装则会自动降级为 Python 原生下载（依然支持断点续传）。
+* **如需获得多线程极限下载速度**，可通过以下任意方式安装 aria2：
+  * **Windows**：在终端运行 `winget install aria2.aria2` 或安装 [Motrix](https://motrix.app/)（插件会自动探测其内置内核）；
+  * **Linux**：`apt update && apt install -y aria2` 或 `conda install -c conda-forge aria2`；
+  * **macOS**：`brew install aria2`。
 
 #### Q2: 下载 Civitai 提示 401 Unauthorized 或下载失败？
 
-* **解决办法**：在新建弹窗的 `civitai_token` 输入框中填入你在 Civitai 个人设置里生成的 **API Token**（只需填一次，浏览器会自动记住）。
+* **解决办法**：在新建任务弹窗的 `civitai_token` 输入框中填入你在 Civitai 个人设置里生成的 **API Token**（输入一次即可，服务端会自动持久化记住）。
 
 ---
 
 ## 📄 开源协议 (License)
 
-MIT License
+[MIT License](./LICENSE)
