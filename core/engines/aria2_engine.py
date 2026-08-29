@@ -188,6 +188,8 @@ def run_aria2_task(
         "16",
         "-k",
         "1M",
+        "--lowest-speed-limit=1M",
+        "--lowest-speed-limit-timeout=10",
         "--summary-interval=1",
         "--console-log-level=notice",
         "--allow-overwrite=true",
