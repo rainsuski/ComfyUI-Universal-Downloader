@@ -1,7 +1,7 @@
 import { ICONS } from "./icons.js";
 import { DownloaderAPI } from "./api.js";
 
-export function openTaskModal({ isEdit = false, taskId = null, taskData = null, serverConfig = {}, onSubmitted = null } = {}) {
+export function openTaskModal({ isEdit = false, taskId = null, taskData = null, onSubmitted = null } = {}) {
     const params = (isEdit && taskData && taskData.params) ? taskData.params : {};
 
     const initialUrl = params.url_or_air || (taskData ? taskData.url_or_air : "") || "";
@@ -9,9 +9,6 @@ export function openTaskModal({ isEdit = false, taskId = null, taskData = null, 
     const initialEngine = params.download_engine || (taskData ? taskData.engine : "aria2 (CLI)") || "aria2 (CLI)";
     const initialCustomPath = params.custom_path || "";
     const initialCustomFilename = params.custom_filename || (taskData && taskData.file_name !== "正在解析资源..." ? taskData.file_name : "") || "";
-    const initialAria2Path = params.aria2_path || serverConfig.aria2_path || "";
-    const initialCivitaiToken = params.civitai_token || serverConfig.civitai_token || "";
-    const initialHfMirror = params.hf_use_mirror !== undefined ? params.hf_use_mirror : (serverConfig.hf_use_mirror !== false);
 
     const modalBackdrop = document.createElement("div");
     modalBackdrop.className = "ud-modal-backdrop";
@@ -66,29 +63,6 @@ export function openTaskModal({ isEdit = false, taskId = null, taskData = null, 
                     <label class="ud-label">custom_filename (自定义文件名)</label>
                     <input type="text" class="ud-input" id="ud-in-custom-filename" value="${initialCustomFilename}" placeholder="留空则自动从网络/API解析真实文件名，如: my_model.safetensors" />
                 </div>
-
-                <div class="ud-form-group">
-                    <label class="ud-label">aria2_path (自定义 aria2 可执行文件路径)</label>
-                    <input type="text" class="ud-input" id="ud-in-aria2-path" value="${initialAria2Path}" placeholder="留空自动探测系统PATH或Motrix路径，亦可手动指定" />
-                </div>
-
-                <div class="ud-form-group">
-                    <label class="ud-label">civitai_token (Civitai API Token)</label>
-                    <div class="ud-input-with-icon">
-                        <input type="password" class="ud-input" id="ud-in-token" value="${initialCivitaiToken}" placeholder="Civitai API Token (civitai下载必填)" autocomplete="off" />
-                        <button type="button" class="ud-btn-eye" id="ud-btn-toggle-token" title="显示/隐藏 Token">${ICONS.eye}</button>
-                    </div>
-                </div>
-
-                <div class="ud-form-group">
-                    <label class="ud-label">hf_use_mirror (HF 镜像加速)</label>
-                    <div class="ud-switch-group">
-                        <label class="ud-switch-label">
-                            <input type="checkbox" id="ud-in-hf-mirror" ${initialHfMirror ? 'checked' : ''} />
-                            <span>启用国内镜像加速 (hf-mirror.com)</span>
-                        </label>
-                    </div>
-                </div>
             </div>
 
             <div class="ud-modal-footer">
@@ -112,14 +86,6 @@ export function openTaskModal({ isEdit = false, taskId = null, taskData = null, 
         if (e.target === modalBackdrop) closeModal();
     };
 
-    const tokenInput = modalBackdrop.querySelector("#ud-in-token");
-    const toggleTokenBtn = modalBackdrop.querySelector("#ud-btn-toggle-token");
-    toggleTokenBtn.onclick = () => {
-        const isPassword = tokenInput.type === "password";
-        tokenInput.type = isPassword ? "text" : "password";
-        toggleTokenBtn.innerHTML = isPassword ? ICONS.eyeOff : ICONS.eye;
-    };
-
     modalBackdrop.querySelector("#ud-modal-submit-btn").onclick = async () => {
         const url_or_air = modalBackdrop.querySelector("#ud-in-url").value.trim();
         if (!url_or_air) {
@@ -137,22 +103,11 @@ export function openTaskModal({ isEdit = false, taskId = null, taskData = null, 
             target_type: modalBackdrop.querySelector("#ud-in-target-type").value,
             download_engine: modalBackdrop.querySelector("#ud-in-engine").value,
             custom_path: modalBackdrop.querySelector("#ud-in-custom-path").value.trim(),
-            custom_filename: modalBackdrop.querySelector("#ud-in-custom-filename").value.trim(),
-            aria2_path: modalBackdrop.querySelector("#ud-in-aria2-path").value.trim(),
-            civitai_token: modalBackdrop.querySelector("#ud-in-token").value.trim(),
-            hf_use_mirror: modalBackdrop.querySelector("#ud-in-hf-mirror").checked
+            custom_filename: modalBackdrop.querySelector("#ud-in-custom-filename").value.trim()
         };
-
-        // 1. 同步等待配置保存至后端
-        await DownloaderAPI.saveConfig({
-            civitai_token: payload.civitai_token,
-            aria2_path: payload.aria2_path,
-            hf_use_mirror: payload.hf_use_mirror
-        });
 
         closeModal();
 
-        // 2. 提交任务
         try {
             if (isEdit) {
                 await DownloaderAPI.editTask({ ...payload, task_id: taskId });

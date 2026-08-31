@@ -1,12 +1,12 @@
 import json
-import os
 import logging
+import os
 
 logger = logging.getLogger("Universal-Downloader")
 
 
 class ConfigManager:
-    """服务端配置文件管理类 (负责持久化存储 API Token / 镜像设置 / 自定义路径等)"""
+    """服务端配置文件管理类 (负责持久化存储 API Token / 镜像设置 / 代理端口 / 自定义路径等)"""
 
     def __init__(self, config_dir=None):
         if config_dir is None:
@@ -20,6 +20,7 @@ class ConfigManager:
             "civitai_token": "",
             "aria2_path": "",
             "hf_use_mirror": True,
+            "proxy_port": "",
         }
         try:
             if not os.path.isfile(self.config_path):

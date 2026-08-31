@@ -52,7 +52,7 @@ def _is_valid_executable(path):
 
 def detect_aria2_path(custom_path=""):
     """跨平台智能探测系统中可用的 aria2 可执行文件绝对路径"""
-    # 1. 优先使用用户在前端设置中指定的自定义路径
+    # 1. 优先使用用户在设置中指定的自定义路径
     if custom_path and custom_path.strip():
         c_path = os.path.abspath(os.path.expanduser(custom_path.strip()))
         if _is_valid_executable(c_path):
@@ -63,7 +63,7 @@ def detect_aria2_path(custom_path=""):
     if sys_aria and _is_valid_executable(sys_aria):
         return sys_aria
 
-    # 3. 检查当前 Python / Conda 虚拟环境 (兼容用户在 ComfyUI 环境下 conda install aria2)
+    # 3. 检查当前 Python / Conda 虚拟环境
     py_env_dirs = [
         sys.prefix,
         getattr(sys, "base_prefix", sys.prefix),
@@ -80,7 +80,7 @@ def detect_aria2_path(custom_path=""):
             if _is_valid_executable(cand):
                 return cand
 
-    # 4. 根据不同操作系统，深度扫描常见包管理器、客户端与绿色便携目录
+    # 4. 常见包管理器与桌面客户端路径扫描
     search_paths = []
 
     if sys.platform.startswith("win"):
@@ -94,7 +94,6 @@ def detect_aria2_path(custom_path=""):
 
         search_paths.extend(
             [
-                # Motrix & Persepolis 等常见桌面下载工具内核
                 os.path.join(
                     local_app_data, r"Programs\Motrix\resources\engine\aria2c.exe"
                 ),
@@ -108,12 +107,10 @@ def detect_aria2_path(custom_path=""):
                 os.path.join(
                     local_app_data, r"Programs\Persepolis Download Manager\aria2c.exe"
                 ),
-                # 包管理器路径 (Scoop / Chocolatey)
                 os.path.join(user_profile, r"scoop\apps\aria2\current\aria2c.exe"),
                 os.path.join(user_profile, r"scoop\shims\aria2c.exe"),
                 os.path.join(prog_data, r"chocolatey\bin\aria2c.exe"),
                 os.path.join(prog_data, r"chocolatey\lib\aria2\tools\aria2c.exe"),
-                # 常见独立便携/绿色安装路径
                 os.path.join(sys_drive, r"\tools\aria2\aria2c.exe"),
                 os.path.join(sys_drive, r"\aria2\aria2c.exe"),
                 os.path.join(user_profile, r"aria2\aria2c.exe"),
@@ -129,11 +126,9 @@ def detect_aria2_path(custom_path=""):
         home = os.path.expanduser("~")
         search_paths.extend(
             [
-                # macOS Homebrew & MacPorts
                 "/opt/homebrew/bin/aria2c",
                 "/usr/local/bin/aria2c",
                 "/opt/local/bin/aria2c",
-                # macOS 应用程序内置内核
                 "/Applications/Motrix.app/Contents/Resources/engine/aria2c",
                 f"{home}/Applications/Motrix.app/Contents/Resources/engine/aria2c",
                 "/Applications/Persepolis Download Manager.app/Contents/Resources/aria2c",
@@ -142,7 +137,6 @@ def detect_aria2_path(custom_path=""):
         )
 
     else:
-        # Linux / Unix / Docker 生产环境
         home = os.path.expanduser("~")
         search_paths.extend(
             [
@@ -159,7 +153,6 @@ def detect_aria2_path(custom_path=""):
             ]
         )
 
-    # 遍历候选列表，返回第一个通过验证的有效路径
     for path in search_paths:
         if path and _is_valid_executable(path):
             return os.path.abspath(path)
@@ -174,9 +167,10 @@ def run_aria2_task(
     target_dir,
     file_name,
     fake_ua,
+    proxy=None,
     on_complete_callback=None,
 ):
-    """跨平台启动 Aria2 命令行子进程下载并实时解析日志输出 (支持断点续传与特殊编码容错)"""
+    """跨平台启动 Aria2 命令行子进程下载 (支持断点续传、全局网络代理与日志解析)"""
     os.makedirs(target_dir, exist_ok=True)
 
     cmd = [
@@ -197,11 +191,15 @@ def run_aria2_task(
         target_dir,
         "-o",
         file_name,
-        final_url,
     ]
 
+    # 全局代理参数注入
+    if proxy:
+        cmd.append(f"--all-proxy={proxy}")
+
+    cmd.append(final_url)
+
     try:
-        # 强制指定 encoding="utf-8" 与 errors="replace"，防止 Linux 简易环境/Docker 下解码崩溃
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,

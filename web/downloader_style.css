@@ -382,6 +382,10 @@
     animation: ud-modal-fadein 0.2s ease-out;
 }
 
+.ud-settings-card {
+    width: 480px;
+}
+
 @keyframes ud-modal-fadein {
     from {
         opacity: 0;
@@ -440,6 +444,12 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
+}
+
+.ud-form-tip {
+    font-size: 11px;
+    color: #71717a;
+    line-height: 1.4;
 }
 
 .ud-form-row {
@@ -582,7 +592,6 @@
     width: 100%;
     box-sizing: border-box;
     padding-right: 36px;
-    /* 为右侧眼睛留出空间 */
 }
 
 .ud-btn-eye {

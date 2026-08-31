@@ -20,6 +20,18 @@ except ImportError:
     folder_paths = None
 
 
+def normalize_proxy(proxy_str):
+    """标准化网络代理地址格式 (兼容 7890 纯端口或完整 URL)"""
+    if not proxy_str or not str(proxy_str).strip():
+        return None
+    p = str(proxy_str).strip()
+    if p.isdigit():
+        return f"http://127.0.0.1:{p}"
+    if not p.startswith(("http://", "https://", "socks5://", "socks5h://")):
+        return f"http://{p}"
+    return p
+
+
 class DownloaderCore:
     """Universal Downloader 核心调度器单例类
     具备多源解析、进行中任务排他互斥锁、断点续传支持、物理文件冲突隔离与任务持久化
@@ -115,13 +127,12 @@ class DownloaderCore:
         target_type="auto",
         custom_path="",
         custom_filename="",
-        civitai_token="",
-        hf_use_mirror=True,
     ):
         saved_cfg = self.load_config()
-        effective_civitai_token = (
-            civitai_token.strip() or saved_cfg.get("civitai_token", "").strip()
-        )
+        effective_civitai_token = saved_cfg.get("civitai_token", "").strip()
+        hf_use_mirror = saved_cfg.get("hf_use_mirror", True)
+        proxy = normalize_proxy(saved_cfg.get("proxy_port", ""))
+
         return self.parser.parse_resource_info(
             url_or_air=url_or_air,
             target_type=target_type,
@@ -129,6 +140,7 @@ class DownloaderCore:
             custom_filename=custom_filename,
             effective_civitai_token=effective_civitai_token,
             hf_use_mirror=hf_use_mirror,
+            proxy=proxy,
         )
 
     def _trigger_comfy_refresh(self):
@@ -146,9 +158,6 @@ class DownloaderCore:
         target_type = params.get("target_type", "auto")
         custom_path = params.get("custom_path", "")
         custom_filename = params.get("custom_filename", "")
-        civitai_token = params.get("civitai_token", "")
-        hf_use_mirror = params.get("hf_use_mirror", True)
-        aria2_path_input = params.get("aria2_path", "")
         download_engine = params.get("download_engine", "aria2 (CLI)")
 
         def _worker():
@@ -159,8 +168,6 @@ class DownloaderCore:
                         target_type=target_type,
                         custom_path=custom_path,
                         custom_filename=custom_filename,
-                        civitai_token=civitai_token,
-                        hf_use_mirror=hf_use_mirror,
                     )
                 )
 
@@ -197,7 +204,6 @@ class DownloaderCore:
                                 )
 
                 # 关卡 3: 本地已有物理文件冲突检测
-                # 如果文件存在但伴随 .aria2 控制文件，说明是未完成的断点续传文件，不触发冲突弹窗
                 is_aria2_incomplete = os.path.isfile(aria_control_file)
                 if os.path.isfile(target_file_path) and not is_aria2_incomplete:
                     size_bytes = os.path.getsize(target_file_path)
@@ -243,11 +249,11 @@ class DownloaderCore:
                                 f"[Universal-Downloader] 覆盖预清理提示: {err}"
                             )
 
+                # 全局配置解析与下载引擎派发
                 saved_cfg = self.load_config()
-                effective_aria2_path = (
-                    aria2_path_input.strip() or saved_cfg.get("aria2_path", "").strip()
-                )
+                effective_aria2_path = saved_cfg.get("aria2_path", "").strip()
                 detected_aria2 = self.detect_aria2_path(effective_aria2_path)
+                proxy = normalize_proxy(saved_cfg.get("proxy_port", ""))
 
                 if "aria2" in download_engine and detected_aria2:
                     task["engine"] = f"aria2 ({detected_aria2})"
@@ -258,6 +264,7 @@ class DownloaderCore:
                         target_dir=target_dir,
                         file_name=file_name,
                         fake_ua=self.fake_ua,
+                        proxy=proxy,
                         on_complete_callback=self._trigger_comfy_refresh,
                     )
                 else:
@@ -272,6 +279,7 @@ class DownloaderCore:
                         target_dir=target_dir,
                         file_name=file_name,
                         fake_ua=self.fake_ua,
+                        proxy=proxy,
                         on_complete_callback=self._trigger_comfy_refresh,
                     )
 
@@ -293,16 +301,6 @@ class DownloaderCore:
 
     def create_task(self, params):
         task_id = f"task_{uuid.uuid4().hex[:8]}"
-
-        cfg_update = {}
-        if params.get("civitai_token", "").strip():
-            cfg_update["civitai_token"] = params.get("civitai_token", "").strip()
-        if params.get("aria2_path", "").strip():
-            cfg_update["aria2_path"] = params.get("aria2_path", "").strip()
-        if "hf_use_mirror" in params:
-            cfg_update["hf_use_mirror"] = bool(params.get("hf_use_mirror"))
-        if cfg_update:
-            self.save_config(cfg_update)
 
         task = {
             "id": task_id,
@@ -402,7 +400,6 @@ class DownloaderCore:
             task["status"] = "CANCELLED"
             task["speed"] = "0 B/s"
 
-            # 取消操作只中止下载，不删除本地临时分块文件，保留重试断点续传的能力
             self._save_tasks()
             return True
         return False
@@ -426,7 +423,6 @@ class DownloaderCore:
         ]
         for tid in to_delete:
             task = self.tasks[tid]
-            # 当用户主动清除记录时，顺带清理未完成的临时分块以释放空间
             if task.get("status") in ("CANCELLED", "FAILED"):
                 save_dir = task.get("save_dir", "")
                 file_name = task.get("file_name", "")

@@ -3,6 +3,7 @@ import { ICONS } from "./js/icons.js";
 import { DownloaderAPI } from "./js/api.js";
 import { renderTaskList } from "./js/task_card.js";
 import { openTaskModal } from "./js/modal_task.js";
+import { openSettingsModal } from "./js/modal_settings.js";
 import { showConflictDialog } from "./js/modal_conflict.js";
 
 // 动态载入 CSS
@@ -28,7 +29,8 @@ class UniversalDownloaderUI {
         this.serverConfig = {
             civitai_token: "",
             aria2_path: "",
-            hf_use_mirror: true
+            hf_use_mirror: true,
+            proxy_port: ""
         };
     }
 
@@ -57,6 +59,9 @@ class UniversalDownloaderUI {
                     <button class="ud-btn ud-btn-primary" id="ud-btn-new-task" title="新建下载任务">
                         ${ICONS.plus} <span>新建</span>
                     </button>
+                    <button class="ud-btn ud-btn-secondary" id="ud-btn-settings" title="全局设置">
+                        ${ICONS.settings}
+                    </button>
                     <button class="ud-btn ud-btn-secondary" id="ud-btn-clear-task" title="清空已完成/失败任务">
                         ${ICONS.trash}
                     </button>
@@ -67,6 +72,7 @@ class UniversalDownloaderUI {
 
         this.taskListEl = this.container.querySelector("#ud-task-list");
         this.container.querySelector("#ud-btn-new-task").onclick = () => this.openTaskModal();
+        this.container.querySelector("#ud-btn-settings").onclick = () => this.openSettingsModal();
         this.container.querySelector("#ud-btn-clear-task").onclick = () => this.clearFinishedTasks();
 
         this.startPolling();
@@ -110,6 +116,16 @@ class UniversalDownloaderUI {
             ) {
                 this.activeConflictTasks.add(task.id);
                 showConflictDialog(task.id, task.conflict_info, () => this.fetchTasks());
+            }
+        });
+    }
+
+    async openSettingsModal() {
+        await this.loadServerConfig();
+        openSettingsModal({
+            serverConfig: this.serverConfig,
+            onSaved: (newConfig) => {
+                this.serverConfig = { ...this.serverConfig, ...newConfig };
             }
         });
     }

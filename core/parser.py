@@ -13,10 +13,18 @@ except ImportError:
 
 
 class ResourceParser:
-    """资源地址与分类解析器 (支持 Civitai AIR、HF Mirror 加速、DiT/Diffusion 智能归类与普适直链解析)"""
+    """资源地址与分类解析器 (支持 Civitai AIR、HF Mirror 加速、全局网络代理、DiT/Diffusion 智能归类与普适直链解析)"""
 
     def __init__(self, fake_ua):
         self.fake_ua = fake_ua
+
+    def _open_url(self, req, timeout=10, proxy=None):
+        """支持网络代理的 URL 请求封装"""
+        if proxy:
+            proxy_handler = urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+            opener = urllib.request.build_opener(proxy_handler)
+            return opener.open(req, timeout=timeout)
+        return urllib.request.urlopen(req, timeout=timeout)
 
     def parse_resource_info(
         self,
@@ -26,6 +34,7 @@ class ResourceParser:
         custom_filename="",
         effective_civitai_token="",
         hf_use_mirror=True,
+        proxy=None,
     ):
         input_str = url_or_air.strip()
         if not input_str:
@@ -146,7 +155,7 @@ class ResourceParser:
 
                 req = urllib.request.Request(api_meta_url, headers=headers)
                 try:
-                    with urllib.request.urlopen(req, timeout=8) as response:
+                    with self._open_url(req, timeout=10, proxy=proxy) as response:
                         meta = json.loads(response.read().decode())
                         files_list = meta.get("files", [])
 
@@ -278,7 +287,6 @@ class ResourceParser:
             if model_category == "auto":
                 model_category = "checkpoints"
 
-            # unet 规范化为 diffusion_models
             effective_category = (
                 "diffusion_models" if model_category == "unet" else model_category
             )
@@ -288,7 +296,6 @@ class ResourceParser:
                 try:
                     possible_paths = folder_paths.get_folder_paths(effective_category)
                     if possible_paths:
-                        # 优先查找真正的 diffusion_models 目录，避免被旧版兼容的 unet 别名带偏
                         for p in possible_paths:
                             if (
                                 "diffusion_models"
@@ -308,7 +315,6 @@ class ResourceParser:
             else:
                 base_target_dir = os.path.join(comfy_root, "models", effective_category)
 
-            # 在分类模式下，无论用户是否输入了前导斜杠（如 /anima），均视为相对子目录拼接
             if user_path_input:
                 clean_sub_path = user_path_input.strip("/\\")
                 target_dir = os.path.abspath(
