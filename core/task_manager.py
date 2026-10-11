@@ -162,18 +162,33 @@ class DownloaderCore:
 
         def _worker():
             try:
-                final_url, file_name, target_dir, model_category = (
-                    self.parse_resource_info(
-                        url_or_air=url_or_air,
-                        target_type=target_type,
-                        custom_path=custom_path,
-                        custom_filename=custom_filename,
+                # 【优化：断点续传/重试时若已存在解析数据，直接复用，免去请求 C 站 API】
+                if (
+                    task.get("final_url")
+                    and task.get("save_dir")
+                    and task.get("file_name")
+                    and task.get("file_name")
+                    not in ("正在解析资源...", "正在重新解析...")
+                ):
+                    final_url = task["final_url"]
+                    file_name = task["file_name"]
+                    target_dir = task["save_dir"]
+                    model_category = task.get("category", "checkpoints")
+                else:
+                    final_url, file_name, target_dir, model_category = (
+                        self.parse_resource_info(
+                            url_or_air=url_or_air,
+                            target_type=target_type,
+                            custom_path=custom_path,
+                            custom_filename=custom_filename,
+                        )
                     )
-                )
+                    # 缓存已解析出的参数
+                    task["final_url"] = final_url
+                    task["file_name"] = file_name
+                    task["save_dir"] = target_dir
+                    task["category"] = model_category
 
-                task["file_name"] = file_name
-                task["save_dir"] = target_dir
-                task["category"] = model_category
                 target_file_path = os.path.join(target_dir, file_name)
                 aria_control_file = f"{target_file_path}.aria2"
 
@@ -210,7 +225,7 @@ class DownloaderCore:
                     size_str = (
                         f"{round(size_bytes / (1024 * 1024 * 1024), 2)} GB"
                         if size_bytes >= 1024 * 1024 * 1024
-                        else f"{round(size_bytes / (1024 * 1024), 2)} MB"
+                        else f"{round(size_bytes / (1024 * 1024 * 1024), 2)} MB"
                     )
 
                     task["status"] = "CONFLICT"
@@ -306,6 +321,7 @@ class DownloaderCore:
             "id": task_id,
             "params": dict(params),
             "url_or_air": params.get("url_or_air", ""),
+            "final_url": "",
             "file_name": "正在解析资源...",
             "save_dir": "",
             "category": params.get("target_type", "auto"),
@@ -333,6 +349,7 @@ class DownloaderCore:
             return False
 
         task = self.tasks[task_id]
+        # 注意：重试时保留 final_url、file_name、save_dir，以便直接断点续传
         task["status"] = "PARSING"
         task["speed"] = "0 B/s"
         task["error_msg"] = ""
@@ -351,6 +368,8 @@ class DownloaderCore:
             return False
 
         task = self.tasks[task_id]
+        # 编辑任务时清除旧的解析直链，强制重新解析
+        task.pop("final_url", None)
         task["params"] = dict(new_params)
         task["url_or_air"] = new_params.get("url_or_air", "")
         task["category"] = new_params.get("target_type", "auto")

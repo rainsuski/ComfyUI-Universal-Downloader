@@ -18,7 +18,7 @@ class ResourceParser:
     def __init__(self, fake_ua):
         self.fake_ua = fake_ua
 
-    def _open_url(self, req, timeout=10, proxy=None):
+    def _open_url(self, req, timeout=30, proxy=None):
         """支持网络代理的 URL 请求封装"""
         if proxy:
             proxy_handler = urllib.request.ProxyHandler({"http": proxy, "https": proxy})
@@ -155,7 +155,7 @@ class ResourceParser:
 
                 req = urllib.request.Request(api_meta_url, headers=headers)
                 try:
-                    with self._open_url(req, timeout=10, proxy=proxy) as response:
+                    with self._open_url(req, timeout=30, proxy=proxy) as response:
                         meta = json.loads(response.read().decode())
                         files_list = meta.get("files", [])
 
