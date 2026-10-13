@@ -1,4 +1,3 @@
-# core/parser.py
 import json
 import os
 import re
@@ -40,7 +39,7 @@ class ResourceParser:
         if not input_str:
             raise ValueError("资源地址不能为空！")
 
-        if not input_str.startswith(("http://", "https://", "urn:air:")):
+        if not input_str.startswith(("http://", "https://", "urn:air:", "air:")):
             raise ValueError(
                 "无效的资源地址！请输入以 http:// 或 https:// 开头的下载链接，或 Civitai AIR 标签"
             )
@@ -84,7 +83,7 @@ class ResourceParser:
                     ]
                 ):
                     model_category = "diffusion_models"
-                elif any(k in low for k in ["lora", "locon", "dora"]):
+                elif any(k in low for k in ["lora", "locon", "dora", "lycoris"]):
                     model_category = "loras"
                 elif "controlnet" in low:
                     model_category = "controlnet"
@@ -97,32 +96,31 @@ class ResourceParser:
                 else:
                     model_category = "checkpoints"
 
-        # B. Civitai (C站) 解析
-        elif "civitai." in input_str or input_str.startswith("urn:air:"):
+        # B. Civitai 解析
+        elif "civitai." in input_str or input_str.startswith(("urn:air:", "air:")):
             version_id = None
             target_file_id = None
 
+            # 从 URL Query 参数中提取指定文件变体 ID
             m_file = re.search(r"fileId=(\d+)", input_str)
             if m_file:
                 target_file_id = m_file.group(1)
 
+            # 解析标准与扩展 Civitai AIR 规范: urn:air:{ecosystem}:{type}:civitai:{id}[@{version}][+{fileId}][.{format}]
             air_match = re.search(
-                r"urn:air:([^:]+):([^:]+):civitai:([0-9]+)(@([0-9]+))?",
+                r"(?:urn:)?air:([^:]+):([^:]+):civitai:([0-9]+)(?:@([0-9]+))?(?:\+([0-9]+))?(?:\.([a-zA-Z0-9]+))?",
                 input_str,
             )
             if air_match:
                 m_type = air_match.group(2).lower()
                 version_id = (
-                    air_match.group(5) if air_match.group(5) else air_match.group(3)
+                    air_match.group(4) if air_match.group(4) else air_match.group(3)
                 )
+                if air_match.group(5):
+                    target_file_id = air_match.group(5)
+
                 if model_category == "auto":
-                    if m_type == "checkpoint":
-                        model_category = "checkpoints"
-                    elif m_type in ("lora", "locon", "dora"):
-                        model_category = "loras"
-                    elif m_type == "vae":
-                        model_category = "vae"
-                    elif m_type in (
+                    if m_type in (
                         "diffusionmodel",
                         "diffusion_models",
                         "diffusion_model",
@@ -132,12 +130,18 @@ class ResourceParser:
                         model_category = "diffusion_models"
                     elif m_type in ("textencoder", "text_encoders", "clip", "t5"):
                         model_category = "text_encoders"
+                    elif m_type == "vae":
+                        model_category = "vae"
+                    elif m_type in ("lora", "locon", "dora", "lycoris"):
+                        model_category = "loras"
                     elif m_type == "controlnet":
                         model_category = "controlnet"
                     elif m_type in ("upscaler", "upscale_models"):
                         model_category = "upscale_models"
                     elif m_type in ("embedding", "textualinversion", "embeddings"):
                         model_category = "embeddings"
+                    elif m_type == "checkpoint":
+                        model_category = "checkpoints"
             elif "modelVersionId=" in input_str:
                 m = re.search(r"modelVersionId=(\d+)", input_str)
                 if m:
@@ -159,6 +163,7 @@ class ResourceParser:
                         meta = json.loads(response.read().decode())
                         files_list = meta.get("files", [])
 
+                        # 精确匹配变体文件或降级选择首选文件
                         matched_file = None
                         if target_file_id and files_list:
                             for f in files_list:
@@ -175,46 +180,141 @@ class ResourceParser:
                         if not file_name and matched_file:
                             file_name = matched_file.get("name", "").strip()
 
-                        base_download_url = meta.get(
-                            "downloadUrl",
-                            f"https://civitai.com/api/download/models/{version_id}",
-                        )
-                        if target_file_id:
-                            sep = "&" if "?" in base_download_url else "?"
-                            final_url = (
-                                f"{base_download_url}{sep}fileId={target_file_id}"
-                            )
+                        # 优先采用变体文件专属直链，避免变体下载降级为默认文件
+                        if matched_file and matched_file.get("downloadUrl"):
+                            final_url = matched_file["downloadUrl"]
                         else:
-                            final_url = base_download_url
+                            base_download_url = meta.get(
+                                "downloadUrl",
+                                f"https://civitai.com/api/download/models/{version_id}",
+                            )
+                            if target_file_id:
+                                sep = "&" if "?" in base_download_url else "?"
+                                final_url = (
+                                    f"{base_download_url}{sep}fileId={target_file_id}"
+                                )
+                            else:
+                                final_url = base_download_url
 
                         if not file_name and "name" in meta:
                             file_name = f"{meta['name']}.safetensors"
 
-                        if model_category == "auto":
-                            m_type = (
+                        # 智能模型分类：细粒度组件 (UNet/DiT, TextEncoder, VAE, LoRA) 优先于通用 Checkpoint 判定
+                        if target_type == "auto":
+                            meta_air = meta.get("air", "").lower()
+                            meta_type = (
                                 meta.get("model", {}).get("type")
                                 or meta.get("type")
                                 or ""
                             ).lower()
-                            if "checkpoint" in m_type:
-                                model_category = "checkpoints"
-                            elif any(k in m_type for k in ["lora", "locon", "dora"]):
-                                model_category = "loras"
-                            elif "vae" in m_type:
-                                model_category = "vae"
-                            elif any(k in m_type for k in ["diffusion", "unet", "dit"]):
+                            file_type = (
+                                matched_file.get("type", "") if matched_file else ""
+                            ).lower()
+                            fn_lower = file_name.lower()
+                            ver_name_lower = meta.get("name", "").lower()
+
+                            is_diffusion = (
+                                ":diffusionmodel:" in meta_air
+                                or ":unet:" in meta_air
+                                or file_type
+                                in ("diffusion model", "diffusionmodel", "unet")
+                                or any(
+                                    k in meta_type for k in ["diffusion", "unet", "dit"]
+                                )
+                                or any(
+                                    k in fn_lower
+                                    for k in [
+                                        "unet",
+                                        "diffusion_model",
+                                        "diffusion_models",
+                                        "dit",
+                                    ]
+                                )
+                                or any(
+                                    k in ver_name_lower
+                                    for k in ["unet", "diffusion_model", "dit"]
+                                )
+                            )
+                            is_text_encoder = (
+                                ":textencoder:" in meta_air
+                                or file_type in ("text encoder", "textencoder", "clip")
+                                or any(
+                                    k in meta_type
+                                    for k in [
+                                        "text_encoder",
+                                        "textencoder",
+                                        "clip",
+                                        "t5",
+                                    ]
+                                )
+                                or any(
+                                    k in fn_lower
+                                    for k in [
+                                        "text_encoder",
+                                        "textencoder",
+                                        "clip",
+                                        "t5",
+                                    ]
+                                )
+                            )
+                            is_vae = (
+                                ":vae:" in meta_air
+                                or file_type == "vae"
+                                or "vae" in meta_type
+                                or "vae" in fn_lower
+                            )
+                            is_lora = (
+                                any(
+                                    k in meta_air
+                                    for k in [
+                                        ":lora:",
+                                        ":locon:",
+                                        ":dora:",
+                                        ":lycoris:",
+                                    ]
+                                )
+                                or any(
+                                    k in meta_type
+                                    for k in ["lora", "locon", "dora", "lycoris"]
+                                )
+                                or any(
+                                    k in file_type
+                                    for k in ["lora", "locon", "dora", "lycoris"]
+                                )
+                            )
+                            is_controlnet = (
+                                ":controlnet:" in meta_air
+                                or "controlnet" in meta_type
+                                or "controlnet" in file_type
+                            )
+                            is_upscaler = (
+                                ":upscaler:" in meta_air
+                                or "upscale" in meta_type
+                                or "upscale" in file_type
+                            )
+                            is_embedding = any(
+                                k in meta_air
+                                for k in [":embedding:", ":textualinversion:"]
+                            ) or any(k in meta_type for k in ["embedding", "textual"])
+
+                            if is_diffusion:
                                 model_category = "diffusion_models"
-                            elif any(
-                                k in m_type
-                                for k in ["text_encoder", "textencoder", "clip", "t5"]
-                            ):
+                            elif is_text_encoder:
                                 model_category = "text_encoders"
-                            elif "controlnet" in m_type:
+                            elif is_vae:
+                                model_category = "vae"
+                            elif is_lora:
+                                model_category = "loras"
+                            elif is_controlnet:
                                 model_category = "controlnet"
-                            elif "upscale" in m_type:
+                            elif is_upscaler:
                                 model_category = "upscale_models"
-                            elif "embedding" in m_type or "textual" in m_type:
+                            elif is_embedding:
                                 model_category = "embeddings"
+                            elif (
+                                "checkpoint" in meta_type or ":checkpoint:" in meta_air
+                            ):
+                                model_category = "checkpoints"
                             else:
                                 model_category = "checkpoints"
 
@@ -239,7 +339,7 @@ class ResourceParser:
                 sep = "&" if "?" in final_url else "?"
                 final_url = f"{final_url}{sep}token={effective_civitai_token}"
 
-        # C. 通用直链
+        # C. 通用直链解析
         else:
             final_url = input_str
             clean_name = input_str.split("?")[0].rstrip("/").split("/")[-1]
@@ -248,7 +348,7 @@ class ResourceParser:
             if model_category == "auto":
                 model_category = "custom_path"
 
-        # 文件名有效性检测
+        # 文件名与下载地址有效性检测
         file_name = file_name.strip()
         final_url = final_url.strip()
 
